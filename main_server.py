@@ -1667,6 +1667,8 @@ async def register_voice(request: Request):
 
 @app.delete('/api/characters/catgirl/{name}')
 async def delete_catgirl(name: str):
+    import shutil
+    
     characters = _config_manager.load_characters()
     if name not in characters.get('猫娘', {}):
         return JSONResponse({'success': False, 'error': '猫娘不存在'}, status_code=404)
@@ -1676,9 +1678,34 @@ async def delete_catgirl(name: str):
     if name == current_catgirl:
         return JSONResponse({'success': False, 'error': '不能删除当前正在使用的猫娘！请先切换到其他猫娘后再删除。'}, status_code=400)
     
+    # 删除对应的记忆文件
+    try:
+        memory_paths = [_config_manager.memory_dir, _config_manager.project_memory_dir]
+        files_to_delete = [
+            f'semantic_memory_{name}',  # 语义记忆目录
+            f'time_indexed_{name}',     # 时间索引数据库文件
+            f'settings_{name}.json',    # 设置文件
+            f'recent_{name}.json',      # 最近聊天记录文件
+        ]
+        
+        for base_dir in memory_paths:
+            for file_name in files_to_delete:
+                file_path = base_dir / file_name
+                if file_path.exists():
+                    try:
+                        if file_path.is_dir():
+                            shutil.rmtree(file_path)
+                        else:
+                            file_path.unlink()
+                        logger.info(f"已删除: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"删除失败 {file_path}: {e}")
+    except Exception as e:
+        logger.error(f"删除记忆文件时出错: {e}")
+    
+    # 删除角色配置
     del characters['猫娘'][name]
     _config_manager.save_characters(characters)
-    # 自动重新加载配置
     await initialize_character_data()
     return {"success": True}
 
