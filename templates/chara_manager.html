@@ -324,12 +324,30 @@ function renderCatgirls() {
         // 展开按钮逻辑
         const expandBtn = block.querySelector('.catgirl-expand');
         const detailsDiv = block.querySelector('.catgirl-details');
+        
+        // 从 localStorage 读取展开状态
+        const storageKey = `catgirl_expand_${key}`;
+        const savedState = localStorage.getItem(storageKey);
+        const shouldBeOpen = savedState === 'true';
+        
+        if (shouldBeOpen) {
+            detailsDiv.style.display = 'block';
+            expandBtn.textContent = '▼';
+            expandedCatgirlName = key;
+            // 延迟加载表单，确保 DOM 已渲染
+            setTimeout(() => {
+                showCatgirlForm(key, detailsDiv);
+            }, 0);
+        }
+        
         expandBtn.onclick = function() {
             const isOpen = detailsDiv.style.display === '' || detailsDiv.style.display === 'block';
             if (isOpen) {
                 detailsDiv.style.display = 'none';
                 expandBtn.textContent = '▶';
                 detailsDiv.innerHTML = '';
+                // 保存状态到 localStorage
+                localStorage.setItem(storageKey, 'false');
                 // 清除展开记录
                 if (expandedCatgirlName === key) {
                     expandedCatgirlName = null;
@@ -337,6 +355,8 @@ function renderCatgirls() {
             } else {
                 detailsDiv.style.display = 'block';
                 expandBtn.textContent = '▼';
+                // 保存状态到 localStorage
+                localStorage.setItem(storageKey, 'true');
                 // 记录当前展开的猫娘
                 expandedCatgirlName = key;
                 showCatgirlForm(key, detailsDiv);
@@ -391,6 +411,8 @@ window.deleteCatgirl = async function(key) {
     
     if (!await showConfirm('确定要删除猫娘"' + key + '"？', '删除猫娘', {danger: true})) return;
     await fetch('/api/characters/catgirl/' + encodeURIComponent(key), {method: 'DELETE'});
+    // 清除 localStorage 中的展开状态记录
+    localStorage.removeItem(`catgirl_expand_${key}`);
     await loadCharacterData();
 };
 
@@ -679,6 +701,14 @@ window.renameCatgirl = async function(oldName) {
         // 如果重命名的是当前展开的猫娘，更新展开记录
         if (expandedCatgirlName === oldName) {
             expandedCatgirlName = newName;
+        }
+        // 迁移 localStorage 中的展开状态记录
+        const oldStorageKey = `catgirl_expand_${oldName}`;
+        const newStorageKey = `catgirl_expand_${newName}`;
+        const savedState = localStorage.getItem(oldStorageKey);
+        if (savedState !== null) {
+            localStorage.setItem(newStorageKey, savedState);
+            localStorage.removeItem(oldStorageKey);
         }
         await loadCharacterData();
     } else {
