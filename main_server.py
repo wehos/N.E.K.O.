@@ -13,6 +13,7 @@ import io
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Body
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from main_helper import core as core, cross_server as cross_server
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -166,6 +167,15 @@ lock = asyncio.Lock()
 
 # --- FastAPI App Setup ---
 app = FastAPI()
+
+# 配置 CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有源（生产环境建议配置具体域名）
+    allow_credentials=True,  # 允许携带凭证（cookies, authorization headers等）
+    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_headers=["*"],  # 允许所有请求头
+)
 
 class CustomStaticFiles(StaticFiles):
     async def get_response(self, path, scope):
