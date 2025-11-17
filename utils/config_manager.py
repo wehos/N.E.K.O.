@@ -14,15 +14,15 @@ from pathlib import Path
 from config import (
     APP_NAME,
     CONFIG_FILES,
-    DEFAULT_MASTER_TEMPLATE,
-    DEFAULT_LANLAN_TEMPLATE,
     DEFAULT_CHARACTERS_CONFIG,
     DEFAULT_CONFIG_DATA,
-    CORE_API_PROFILES,
-    ASSIST_API_PROFILES,
-    ASSIST_API_KEY_FIELDS,
 )
 from config.prompts_chara import lanlan_prompt
+from utils.api_config_loader import (
+    get_core_api_profiles,
+    get_assist_api_profiles,
+    get_assist_api_key_fields,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -682,10 +682,14 @@ class ConfigManager:
 
         config['COMPUTER_USE_MODEL_API_KEY'] = config['COMPUTER_USE_GROUND_API_KEY'] = config['ASSIST_API_KEY_GLM']
 
+        core_api_profiles = get_core_api_profiles()
+        assist_api_profiles = get_assist_api_profiles()
+        assist_api_key_fields = get_assist_api_key_fields()
+
         # Core API profile
         core_api_value = core_cfg.get('coreApi') or config['CORE_API_TYPE']
         config['CORE_API_TYPE'] = core_api_value
-        core_profile = CORE_API_PROFILES.get(core_api_value)
+        core_profile = core_api_profiles.get(core_api_value)
         if core_profile:
             config.update(core_profile)
 
@@ -698,17 +702,17 @@ class ConfigManager:
 
         config['assistApi'] = assist_api_value
 
-        assist_profile = ASSIST_API_PROFILES.get(assist_api_value)
+        assist_profile = assist_api_profiles.get(assist_api_value)
         if not assist_profile and assist_api_value != 'qwen':
             logger.warning("未知的 assistApi '%s'，回退到 qwen。", assist_api_value)
             assist_api_value = 'qwen'
             config['assistApi'] = assist_api_value
-            assist_profile = ASSIST_API_PROFILES.get(assist_api_value)
+            assist_profile = assist_api_profiles.get(assist_api_value)
 
         if assist_profile:
             config.update(assist_profile)
 
-        key_field = ASSIST_API_KEY_FIELDS.get(assist_api_value)
+        key_field = assist_api_key_fields.get(assist_api_value)
         if key_field:
             derived_key = config.get(key_field, '')
             if derived_key:

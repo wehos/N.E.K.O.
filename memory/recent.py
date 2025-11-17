@@ -51,6 +51,9 @@ class CompressedRecentHistoryManager:
         try:
             self.user_histories[lanlan_name].extend(new_messages)
 
+            with open(self.log_file_path[lanlan_name], "w", encoding='utf-8') as f:  # Save the updated history to file before compressing
+                json.dump(messages_to_dict(self.user_histories[lanlan_name]), f, indent=2, ensure_ascii=False)
+
             if len(self.user_histories[lanlan_name]) > self.max_history_length:
                 # 压缩旧消息
                 to_compress = self.user_histories[lanlan_name][:-self.max_history_length+1]

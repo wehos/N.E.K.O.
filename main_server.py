@@ -358,6 +358,34 @@ async def get_core_config_api():
         }
 
 
+@app.get("/api/config/api_providers")
+async def get_api_providers_config():
+    """获取API服务商配置（供前端使用）"""
+    try:
+        from utils.api_config_loader import (
+            get_core_api_providers_for_frontend,
+            get_assist_api_providers_for_frontend,
+        )
+        
+        # 使用缓存加载配置（性能更好，配置更新后需要重启服务）
+        core_providers = get_core_api_providers_for_frontend()
+        assist_providers = get_assist_api_providers_for_frontend()
+        
+        return {
+            "success": True,
+            "core_api_providers": core_providers,
+            "assist_api_providers": assist_providers,
+        }
+    except Exception as e:
+        logger.error(f"获取API服务商配置失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "core_api_providers": [],
+            "assist_api_providers": [],
+        }
+
+
 @app.post("/api/config/core_api")
 async def update_core_config(request: Request):
     """更新核心配置（API Key）"""

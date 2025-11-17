@@ -11,6 +11,9 @@ let isInitialized = false;
 let motionTimer = null; // 动作持续时间定时器
 let isEmotionChanging = false; // 防止快速连续点击的标志
 
+// 全局：判断是否为移动端宽度
+const isMobileWidth = () => window.innerWidth <= 768;
+
 // Live2D 管理器类
 class Live2DManager {
     constructor() {
@@ -1334,6 +1337,25 @@ class Live2DManager {
         document.body.appendChild(buttonsContainer);
         this._floatingButtonsContainer = buttonsContainer;
 
+		// 响应式：小屏时固定在右下角并横向排列（使用全局 isMobileWidth）
+		const applyResponsiveFloatingLayout = () => {
+			if (isMobileWidth()) {
+				// 移动端：固定在右下角，纵向排布，整体上移100px
+				buttonsContainer.style.flexDirection = 'column';
+				buttonsContainer.style.bottom = '116px';
+				buttonsContainer.style.right = '16px';
+				buttonsContainer.style.left = '';
+				buttonsContainer.style.top = '';
+			} else {
+				// 桌面端：恢复纵向排布，由 ticker 动态定位
+				buttonsContainer.style.flexDirection = 'column';
+				buttonsContainer.style.bottom = '';
+				buttonsContainer.style.right = '';
+			}
+		};
+		applyResponsiveFloatingLayout();
+		window.addEventListener('resize', applyResponsiveFloatingLayout);
+
         // 定义按钮配置（从上到下：麦克风、显示屏、锤子、设置、睡觉）
         // 添加版本号防止缓存（更新图标时修改这个版本号）
         const iconVersion = '?v=' + Date.now();
@@ -1348,6 +1370,10 @@ class Live2DManager {
 
         // 创建主按钮
         buttonConfigs.forEach(config => {
+			// 移动端隐藏 agent 和 goodbye 按钮
+			if (isMobileWidth() && (config.id === 'agent' || config.id === 'goodbye')) {
+				return;
+			}
             const btnWrapper = document.createElement('div');
             btnWrapper.style.position = 'relative';
             btnWrapper.style.display = 'flex';
@@ -1575,7 +1601,18 @@ class Live2DManager {
                 btnWrapper.appendChild(btn);
                 
                 // 如果有弹出框且需要独立的触发器（仅麦克风）
-                if (config.hasPopup && config.separatePopupTrigger) {
+				if (config.hasPopup && config.separatePopupTrigger) {
+					// 手机模式下移除麦克风弹窗与触发器
+					if (isMobileWidth() && config.id === 'mic') {
+						buttonsContainer.appendChild(btnWrapper);
+						this._floatingButtons[config.id] = { 
+							button: btn, 
+							wrapper: btnWrapper,
+							imgOff: imgOff,
+							imgOn: imgOn
+						};
+						return;
+					}
                     const popup = this.createPopup(config.id);
                     
                     // 创建三角按钮（用于触发弹出框）
@@ -1746,6 +1783,10 @@ class Live2DManager {
                 if (!model || !model.parent) {
                     return;
                 }
+				// 移动端固定位置，不随模型移动
+				if (isMobileWidth()) {
+					return;
+				}
                 const bounds = model.getBounds();
                 const screenWidth = window.innerWidth;
                 const screenHeight = window.innerHeight;
@@ -2151,138 +2192,141 @@ class Live2DManager {
                 });
             });
             
-            // 添加分隔线
-            const separator = document.createElement('div');
-            Object.assign(separator.style, {
-                height: '1px',
-                background: 'rgba(0,0,0,0.1)',
-                margin: '4px 0'
-            });
-            popup.appendChild(separator);
-            
-            // 然后添加导航菜单项
-            const settingsItems = [
-                { id: 'live2d-manage', label: 'Live2D设置', icon: '/static/icons/live2d_settings_icon.png', action: 'navigate', urlBase: '/l2d' },
-                { id: 'api-keys', label: 'API密钥', icon: '/static/icons/api_key_icon.png', action: 'navigate', url: '/api_key' },
-                { id: 'character', label: '角色管理', icon: '/static/icons/character_icon.png', action: 'navigate', url: '/chara_manager' },
-                { id: 'voice-clone', label: '声音克隆', icon: '/static/icons/voice_clone_icon.png', action: 'navigate', url: '/voice_clone' },
-                { id: 'memory', label: '记忆浏览', icon: '/static/icons/memory_icon.png', action: 'navigate', url: '/memory_browser' }
-            ];
-            
-            settingsItems.forEach(item => {
-                const menuItem = document.createElement('div');
-                Object.assign(menuItem.style, {
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    borderRadius: '6px',
-                    transition: 'background 0.2s ease',
-                    fontSize: '13px',
-                    whiteSpace: 'nowrap',
-                    color: '#333'  // 文本颜色为深灰色
-                });
-                
-                // 添加图标（如果有）
-                if (item.icon) {
-                    const iconImg = document.createElement('img');
-                    iconImg.src = item.icon;
-                    iconImg.alt = item.label;
-                    Object.assign(iconImg.style, {
-                        width: '24px',
-                        height: '24px',
-                        objectFit: 'contain',
-                        flexShrink: '0'
-                    });
-                    menuItem.appendChild(iconImg);
-                }
-                
-                // 添加文本
-                const labelText = document.createElement('span');
-                labelText.textContent = item.label;
-                Object.assign(labelText.style, {
-                    display: 'flex',
-                    alignItems: 'center',
-                    lineHeight: '1',
-                    height: '24px'  // 与图标高度一致，确保垂直居中
-                });
-                menuItem.appendChild(labelText);
-                
-                menuItem.addEventListener('mouseenter', () => {
-                    menuItem.style.background = 'rgba(79, 140, 255, 0.1)';
-                });
-                menuItem.addEventListener('mouseleave', () => {
-                    menuItem.style.background = 'transparent';
-                });
-                
-                menuItem.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (item.action === 'navigate') {
-                        // 动态构建 URL（点击时才获取 lanlan_name）
-                        let finalUrl = item.url || item.urlBase;
-                        if (item.id === 'live2d-manage' && item.urlBase) {
-                            // 从 window.lanlan_config 动态获取 lanlan_name
-                            const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
-                            finalUrl = `${item.urlBase}?lanlan_name=${encodeURIComponent(lanlanName)}`;
-                            // Live2D设置页直接跳转
-                            window.location.href = finalUrl;
-                        } else if (item.id === 'voice-clone' && item.url) {
-                            // 声音克隆页面也需要传递 lanlan_name
-                            const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
-                            finalUrl = `${item.url}?lanlan_name=${encodeURIComponent(lanlanName)}`;
-                            
-                            // 检查是否已有该URL的窗口打开
-                            if (this._openSettingsWindows[finalUrl]) {
-                                const existingWindow = this._openSettingsWindows[finalUrl];
-                                if (existingWindow && !existingWindow.closed) {
-                                    existingWindow.focus();
-                                    return;
-                                } else {
-                                    delete this._openSettingsWindows[finalUrl];
-                                }
-                            }
-                            
-                            // 打开新窗口并保存引用
-                            const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
-                            if (newWindow) {
-                                this._openSettingsWindows[finalUrl] = newWindow;
-                            }
-                        } else {
-                            // 其他页面弹出新窗口，但检查是否已打开
-                            // 检查是否已有该URL的窗口打开
-                            if (this._openSettingsWindows[finalUrl]) {
-                                const existingWindow = this._openSettingsWindows[finalUrl];
-                                // 检查窗口是否仍然打开
-                                if (existingWindow && !existingWindow.closed) {
-                                    // 聚焦到已存在的窗口
-                                    existingWindow.focus();
-                                    return;
-                                } else {
-                                    // 窗口已关闭，清除引用
-                                    delete this._openSettingsWindows[finalUrl];
-                                }
-                            }
-                            
-                            // 打开新窗口并保存引用
-                            const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
-                            if (newWindow) {
-                                this._openSettingsWindows[finalUrl] = newWindow;
-                                
-                                // 监听窗口关闭事件，清除引用
-                                const checkClosed = setInterval(() => {
-                                    if (newWindow.closed) {
-                                        delete this._openSettingsWindows[finalUrl];
-                                        clearInterval(checkClosed);
-                                    }
-                                }, 500);
-                            }
-                        }
-                    }
-                });
-                
-                popup.appendChild(menuItem);
-            });
+			// 手机仅保留两个开关；桌面端追加导航菜单
+			if (!isMobileWidth()) {
+				// 添加分隔线
+				const separator = document.createElement('div');
+				Object.assign(separator.style, {
+					height: '1px',
+					background: 'rgba(0,0,0,0.1)',
+					margin: '4px 0'
+				});
+				popup.appendChild(separator);
+				
+				// 然后添加导航菜单项
+				const settingsItems = [
+					{ id: 'live2d-manage', label: 'Live2D设置', icon: '/static/icons/live2d_settings_icon.png', action: 'navigate', urlBase: '/l2d' },
+					{ id: 'api-keys', label: 'API密钥', icon: '/static/icons/api_key_icon.png', action: 'navigate', url: '/api_key' },
+					{ id: 'character', label: '角色管理', icon: '/static/icons/character_icon.png', action: 'navigate', url: '/chara_manager' },
+					{ id: 'voice-clone', label: '声音克隆', icon: '/static/icons/voice_clone_icon.png', action: 'navigate', url: '/voice_clone' },
+					{ id: 'memory', label: '记忆浏览', icon: '/static/icons/memory_icon.png', action: 'navigate', url: '/memory_browser' }
+				];
+				
+				settingsItems.forEach(item => {
+					const menuItem = document.createElement('div');
+					Object.assign(menuItem.style, {
+						display: 'flex',
+						alignItems: 'center',
+						gap: '8px',
+						padding: '8px 12px',
+						cursor: 'pointer',
+						borderRadius: '6px',
+						transition: 'background 0.2s ease',
+						fontSize: '13px',
+						whiteSpace: 'nowrap',
+						color: '#333'  // 文本颜色为深灰色
+					});
+					
+					// 添加图标（如果有）
+					if (item.icon) {
+						const iconImg = document.createElement('img');
+						iconImg.src = item.icon;
+						iconImg.alt = item.label;
+						Object.assign(iconImg.style, {
+							width: '24px',
+							height: '24px',
+							objectFit: 'contain',
+							flexShrink: '0'
+						});
+						menuItem.appendChild(iconImg);
+					}
+					
+					// 添加文本
+					const labelText = document.createElement('span');
+					labelText.textContent = item.label;
+					Object.assign(labelText.style, {
+						display: 'flex',
+						alignItems: 'center',
+						lineHeight: '1',
+						height: '24px'  // 与图标高度一致，确保垂直居中
+					});
+					menuItem.appendChild(labelText);
+					
+					menuItem.addEventListener('mouseenter', () => {
+						menuItem.style.background = 'rgba(79, 140, 255, 0.1)';
+					});
+					menuItem.addEventListener('mouseleave', () => {
+						menuItem.style.background = 'transparent';
+					});
+					
+					menuItem.addEventListener('click', (e) => {
+						e.stopPropagation();
+						if (item.action === 'navigate') {
+							// 动态构建 URL（点击时才获取 lanlan_name）
+							let finalUrl = item.url || item.urlBase;
+							if (item.id === 'live2d-manage' && item.urlBase) {
+								// 从 window.lanlan_config 动态获取 lanlan_name
+								const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+								finalUrl = `${item.urlBase}?lanlan_name=${encodeURIComponent(lanlanName)}`;
+								// Live2D设置页直接跳转
+								window.location.href = finalUrl;
+							} else if (item.id === 'voice-clone' && item.url) {
+								// 声音克隆页面也需要传递 lanlan_name
+								const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+								finalUrl = `${item.url}?lanlan_name=${encodeURIComponent(lanlanName)}`;
+								
+								// 检查是否已有该URL的窗口打开
+								if (this._openSettingsWindows[finalUrl]) {
+									const existingWindow = this._openSettingsWindows[finalUrl];
+									if (existingWindow && !existingWindow.closed) {
+										existingWindow.focus();
+										return;
+									} else {
+										delete this._openSettingsWindows[finalUrl];
+									}
+								}
+								
+								// 打开新窗口并保存引用
+								const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
+								if (newWindow) {
+									this._openSettingsWindows[finalUrl] = newWindow;
+								}
+							} else {
+								// 其他页面弹出新窗口，但检查是否已打开
+								// 检查是否已有该URL的窗口打开
+								if (this._openSettingsWindows[finalUrl]) {
+									const existingWindow = this._openSettingsWindows[finalUrl];
+									// 检查窗口是否仍然打开
+									if (existingWindow && !existingWindow.closed) {
+										// 聚焦到已存在的窗口
+										existingWindow.focus();
+										return;
+									} else {
+										// 窗口已关闭，清除引用
+										delete this._openSettingsWindows[finalUrl];
+									}
+								}
+								
+								// 打开新窗口并保存引用
+								const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
+								if (newWindow) {
+									this._openSettingsWindows[finalUrl] = newWindow;
+									
+									// 监听窗口关闭事件，清除引用
+									const checkClosed = setInterval(() => {
+										if (newWindow.closed) {
+											delete this._openSettingsWindows[finalUrl];
+											clearInterval(checkClosed);
+										}
+									}, 500);
+								}
+							}
+						}
+					});
+					
+					popup.appendChild(menuItem);
+				});
+			}
         }
 
         return popup;
