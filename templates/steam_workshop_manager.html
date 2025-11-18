@@ -559,6 +559,19 @@
             margin-top: 16px;
             line-height: 1.6;
         }
+        
+        .info-box {
+            background-color: #e1f5fe;
+            border-left: 4px solid #0288d1;
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 4px;
+        }
+        
+        .info-box p {
+            margin: 0;
+            color: #01579b;
+        }
     </style>
 </head>
 <body>
@@ -568,12 +581,16 @@
         <!-- 页面控制区 -->
         <div class="page-controls">
             <button id="upload-toggle-button" class="upload-toggle-button" onclick="toggleUploadSection()">上传内容到创意工坊</button>
+            <button id="local-items-toggle-button" class="upload-toggle-button" onclick="toggleLocalItemsSection()">管理本地物品</button>
         </div>
         
         <!-- 上传内容部分 -->
         <div id="upload" class="upload-section-container" style="display: none;">
             <div class="upload-section">
                 <h2>上传到创意工坊</h2>
+                <div class="info-box">
+                    <p>请先在"管理本地物品"区域选择一个未发布的物品，然后点击"准备上传"按钮。内容文件夹路径和预览图片路径将自动填充。</p>
+                </div>
                 
                 <div id="message-area"></div>
                 
@@ -589,14 +606,14 @@
                 
                 <div class="form-group">
                     <label for="content-folder">内容文件夹路径 *</label>
-                    <input type="text" id="content-folder" placeholder="输入内容文件夹的完整路径" aria-describedby="content-folder-help">
-                    <small id="content-folder-help">输入包含您创作内容的文件夹路径，例如: D:\Projects\MyMod</small>
+                    <input type="text" id="content-folder" placeholder="从本地物品中获取的内容文件夹路径" aria-describedby="content-folder-help" readonly>
+                    <small id="content-folder-help">此路径从您选择的本地物品中自动获取，不可手动修改。请先在"管理本地物品"中选择要上传的物品。</small>
                 </div>
                 
                 <div class="form-group">
                     <label for="preview-image">预览图片路径 *</label>
-                    <input type="text" id="preview-image" placeholder="输入预览图片的完整路径" aria-describedby="preview-image-help">
-                    <small id="preview-image-help">输入预览图片的路径，支持.jpg、.png格式</small>
+                    <input type="text" id="preview-image" placeholder="从本地物品中获取的预览图片路径" aria-describedby="preview-image-help" readonly>
+                    <small id="preview-image-help">此路径从您选择的本地物品中自动获取，不可手动修改。</small>
                 </div>
                 
                 <div class="form-group">
@@ -622,6 +639,30 @@
                 </div>
                 
                 <button class="button" onclick="uploadItem()">上传到创意工坊</button>
+            </div>
+        </div>
+        
+        <!-- 本地物品管理部分 -->
+        <div id="local-items" class="upload-section-container" style="display: none;">
+            <div class="local-items-section">
+                <h2>管理本地物品</h2>
+                
+                <div class="form-group">
+                    <label for="scan-folder">扫描文件夹路径</label>
+                    <input type="text" id="scan-folder" placeholder="请选择创意工坊物品文件夹" aria-describedby="scan-folder-help" readonly>
+                    <input type="file" id="folder-selector" style="display: none;" webkitdirectory directory multiple>
+                    <small id="scan-folder-help">选择包含创意工坊物品的文件夹，例如: D:\Steam\steamapps\workshop\content\游戏ID</small>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="button button-sm" onclick="document.getElementById('folder-selector').click()">浏览...</button>
+                        <button class="button button-sm" onclick="scanLocalItems()">扫描物品</button>
+                    </div>
+                </div>
+                
+                <div id="local-items-list" class="cards-container">
+                    <div class="empty-state">
+                        <p>请选择并扫描一个包含创意工坊物品的文件夹</p>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -698,8 +739,485 @@
                 uploadSection.scrollIntoView({ behavior: 'smooth' });
             } else {
                 uploadSection.style.display = 'none';
-                toggleButton.textContent = '上传内容到创意工坊';
             }
+        }
+        
+        // 本地物品区域切换功能
+        // 检查文件是否存在
+            async function doesFileExist(filePath) {
+                try {
+                    const response = await fetch(`/api/file-exists?path=${encodeURIComponent(filePath)}`);
+                    const result = await response.json();
+                    return result.exists;
+                } catch (error) {
+                    // 如果API不可用，返回false
+                    return false;
+                }
+            }
+            
+            // 查找预览图片
+            async function findPreviewImage(folderPath) {
+                try {
+                    // 尝试查找常见的预览图片文件
+                    const commonImageNames = ['preview.jpg', 'preview.png', 'thumbnail.jpg', 'thumbnail.png', 'icon.jpg', 'icon.png', 'header.jpg', 'header.png'];
+                    
+                    for (const imageName of commonImageNames) {
+                        const imagePath = `${folderPath}/${imageName}`;
+                        if (await doesFileExist(imagePath)) {
+                            return imagePath;
+                        }
+                    }
+                    
+                    // 如果找不到常见预览图，尝试使用API获取文件夹中的第一个图片文件
+                    const response = await fetch(`/api/find-first-image?folder=${encodeURIComponent(folderPath)}`);
+                    const result = await response.json();
+                    
+                    if (result.success && result.imagePath) {
+                        return result.imagePath;
+                    }
+                } catch (error) {
+                    console.error('查找预览图片失败:', error);
+                }
+                
+                return null;
+            }
+            
+            // 格式化日期
+            function formatDate(date) {
+                return new Date(date).toLocaleString('zh-CN', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+            
+            // 创意工坊物品对比
+            async function compareLocalWithWorkshop(localItem) {
+                try {
+                    // 获取已发布的创意工坊物品
+                    const workshopItems = await getWorkshopItems();
+                    
+                    // 比较名称
+                    for (const workshopItem of workshopItems) {
+                        if (areNamesSimilar(localItem.name, workshopItem.title)) {
+                            return {
+                                exists: true,
+                                item: workshopItem,
+                                reason: '名称相似'
+                            };
+                        }
+                    }
+                } catch (error) {
+                    console.error('创意工坊对比失败:', error);
+                }
+                
+                return { exists: false };
+            }
+            
+            // 检查名称是否相似
+            function areNamesSimilar(name1, name2) {
+                // 简单的相似度检查，可以根据需要改进
+                name1 = name1.toLowerCase().trim();
+                name2 = name2.toLowerCase().trim();
+                
+                // 如果完全相同，直接返回true
+                if (name1 === name2) return true;
+                
+                // 如果一个名称包含另一个名称
+                if (name1.includes(name2) || name2.includes(name1)) return true;
+                
+                // 计算编辑距离（简单版本）
+                if (Math.abs(name1.length - name2.length) > 3) return false;
+                
+                return false;
+            }
+            
+            // 获取创意工坊物品列表
+            async function getWorkshopItems() {
+                try {
+                    const response = await fetch('/api/steam/workshop/subscribed-items');
+                    const data = await response.json();
+                    if (data.success) {
+                        return data.items;
+                    }
+                } catch (error) {
+                    console.error('获取创意工坊物品失败:', error);
+                }
+                return [];
+            }
+            
+            function toggleLocalItemsSection() {
+            const localItemsSection = document.getElementById('local-items');
+            const toggleButton = document.getElementById('local-items-toggle-button');
+            
+            // 切换本地物品区域的显示/隐藏
+            if (localItemsSection.style.display === 'none') {
+                localItemsSection.style.display = 'block';
+                toggleButton.textContent = '隐藏本地物品';
+                // 平滑滚动到本地物品区域
+                localItemsSection.scrollIntoView({ behavior: 'smooth' });
+            } else {
+                localItemsSection.style.display = 'none';
+                toggleButton.textContent = '管理本地物品';
+            }
+        }
+        
+        // 文件夹选择事件处理
+        document.getElementById('folder-selector').addEventListener('change', function(e) {
+            if (e.target.files && e.target.files.length > 0) {
+                // 获取选择的第一个文件夹的路径
+                const folderPath = e.target.files[0].webkitRelativePath ? 
+                    e.target.files[0].webkitRelativePath.split('/')[0] : 
+                    e.target.files[0].path;
+                
+                // 有些浏览器可能只返回文件名，需要提取完整路径
+                if (!folderPath.includes('\\') && !folderPath.includes('/')) {
+                    const fullPath = e.target.files[0].path;
+                    const pathParts = fullPath.split(/[\\/]/);
+                    // 移除最后一部分（文件名）
+                    pathParts.pop();
+                    document.getElementById('scan-folder').value = pathParts.join('\\');
+                } else {
+                    document.getElementById('scan-folder').value = folderPath;
+                }
+            }
+        });
+
+        // 扫描本地物品
+        function scanLocalItems() {
+            const folderPath = document.getElementById('scan-folder').value.trim();
+            
+            if (!folderPath) {
+                showMessage('请输入要扫描的文件夹路径', 'error');
+                return;
+            }
+            
+            // 简化路径验证，只检查是否为空
+            // 文件管理器选择的路径通常已经是有效的
+            // 可以移除严格的格式验证，让后端API处理实际的路径验证
+            
+            // 显示加载中消息
+            showMessage('正在扫描本地物品...', 'info');
+            
+            // 调用API扫描本地文件夹中的物品
+            fetch('/api/steam/workshop/local-items/scan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ folder_path: folderPath })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP错误，状态码: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // 获取本地物品列表和创意工坊已发布物品信息
+                    const localItems = data.local_items || [];
+                    const publishedItems = data.published_items || [];
+                    
+                    // 更新UI显示本地物品
+                    displayLocalItems(localItems, publishedItems);
+                    
+                    showMessage(`成功扫描到 ${localItems.length} 个本地物品`, 'success');
+                } else {
+                    showMessage(`扫描失败: ${data.error || '未知错误'}`, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('扫描本地物品失败:', error);
+                showMessage(`扫描过程中发生错误: ${error.message}`, 'error');
+            });
+        }
+        
+        // 检查文件是否存在
+            async function doesFileExist(filePath) {
+                try {
+                    const response = await fetch(`/api/file-exists?path=${encodeURIComponent(filePath)}`);
+                    const result = await response.json();
+                    return result.exists;
+                } catch (error) {
+                    // 如果API不可用，返回false
+                    return false;
+                }
+            }
+            
+            // 查找预览图片
+            async function findPreviewImage(folderPath) {
+                try {
+                    // 尝试查找常见的预览图片文件
+                    const commonImageNames = ['preview.jpg', 'preview.png', 'thumbnail.jpg', 'thumbnail.png', 'icon.jpg', 'icon.png', 'header.jpg', 'header.png'];
+                    
+                    for (const imageName of commonImageNames) {
+                        const imagePath = `${folderPath}/${imageName}`;
+                        if (await doesFileExist(imagePath)) {
+                            return imagePath;
+                        }
+                    }
+                    
+                    // 如果找不到常见预览图，尝试使用API获取文件夹中的第一个图片文件
+                    const response = await fetch(`/api/find-first-image?folder=${encodeURIComponent(folderPath)}`);
+                    const result = await response.json();
+                    
+                    if (result.success && result.imagePath) {
+                        return result.imagePath;
+                    }
+                } catch (error) {
+                    console.error('查找预览图片失败:', error);
+                }
+                
+                return null;
+            }
+            
+            // 创意工坊物品对比
+            async function compareLocalWithWorkshop(localItem) {
+                try {
+                    // 获取已发布的创意工坊物品
+                    const workshopItems = await getWorkshopItems();
+                    
+                    // 比较名称
+                    for (const workshopItem of workshopItems) {
+                        if (areNamesSimilar(localItem.name, workshopItem.title)) {
+                            return {
+                                exists: true,
+                                item: workshopItem,
+                                reason: '名称相似'
+                            };
+                        }
+                    }
+                } catch (error) {
+                    console.error('创意工坊对比失败:', error);
+                }
+                
+                return { exists: false };
+            }
+            
+            // 检查名称是否相似
+            function areNamesSimilar(name1, name2) {
+                // 简单的相似度检查，可以根据需要改进
+                name1 = name1.toLowerCase().trim();
+                name2 = name2.toLowerCase().trim();
+                
+                // 如果完全相同，直接返回true
+                if (name1 === name2) return true;
+                
+                // 如果一个名称包含另一个名称
+                if (name1.includes(name2) || name2.includes(name1)) return true;
+                
+                // 计算编辑距离（简单版本）
+                if (Math.abs(name1.length - name2.length) > 3) return false;
+                
+                return false;
+            }
+            
+            // 获取创意工坊物品列表
+            async function getWorkshopItems() {
+                try {
+                    const response = await fetch('/api/steam/workshop/subscribed-items');
+                    const data = await response.json();
+                    if (data.success) {
+                        return data.items;
+                    }
+                } catch (error) {
+                    console.error('获取创意工坊物品失败:', error);
+                }
+                return [];
+            }
+            
+            // 显示本地物品卡片
+            function displayLocalItems(localItems, publishedItems) {
+            const itemsList = document.getElementById('local-items-list');
+            
+            if (localItems.length === 0) {
+                itemsList.innerHTML = `
+                    <div class="empty-state">
+                        <p>在指定文件夹中未找到任何创意工坊物品</p>
+                        <button class="button" onclick="scanLocalItems()">重新扫描</button>
+                    </div>
+                `;
+                return;
+            }
+            
+            // 创建物品卡片HTML
+            itemsList.innerHTML = localItems.map(item => {
+                // 检查该物品是否已发布到创意工坊
+                const isPublished = publishedItems.some(published => 
+                    published.localId === item.id || 
+                    (published.title && item.name && 
+                     published.title.toLowerCase() === item.name.toLowerCase())
+                );
+                
+                // 确定状态类和文本
+                let statusClass = 'status-error';
+                let statusText = '未发布';
+                
+                if (isPublished) {
+                    statusClass = 'status-published';
+                    statusText = '已发布';
+                }
+                
+                // 生成预览图片URL或使用默认图片
+                const previewUrl = item.previewImage ? item.previewImage : '../static/icons/Steam_icon_logo.png';
+                
+                // 生成卡片HTML
+                return `
+                    <div class="workshop-card">
+                        <img src="${previewUrl}" alt="${item.name || '本地物品'}" class="card-image">
+                        <div class="card-content">
+                            <h3 class="card-title">${item.name || '未命名物品'}</h3>
+                            <div class="status-badge ${statusClass}">${statusText}</div>
+                            <div class="card-info">路径: ${item.path}</div>
+                            <div class="card-info">修改日期: ${formatDate(item.lastModified)}</div>
+                            <div class="card-info">大小: ${formatFileSize(item.size)}</div>
+                            
+                            ${!isPublished ? `
+                                <div class="card-actions">
+                                    <button class="button" onclick="prepareItemForUpload('${item.id}')">准备上传</button>
+                                    <button class="button button-primary" onclick="quickUploadItem('${item.id}')">快速上传</button>
+                                </div>
+                            ` : `
+                                <div class="card-actions">
+                                    <button class="button button-disabled" disabled>已发布</button>
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // 准备物品上传
+        function prepareItemForUpload(itemId) {
+            // 调用API获取物品详情
+            fetch(`/api/steam/workshop/local-items/${itemId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP错误，状态码: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        const item = data.item;
+                        
+                        // 填充上传表单
+                        document.getElementById('item-title').value = item.name || '';
+                        document.getElementById('content-folder').value = item.path || '';
+                        
+                        // 如果有预览图片，填充预览图片路径
+                        if (item.previewImage) {
+                            document.getElementById('preview-image').value = item.previewImage;
+                        }
+                        
+                        // 切换到上传区域
+                        toggleUploadSection();
+                        
+                        showMessage('已将本地物品信息加载到上传表单', 'success');
+                    } else {
+                        showMessage(`获取物品详情失败: ${data.error || '未知错误'}`, 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('准备上传失败:', error);
+                    showMessage(`准备上传过程中发生错误: ${error.message}`, 'error');
+                });
+        }
+        
+        // 快速上传物品
+        async function quickUploadItem(itemId) {
+            try {
+                // 显示上传中状态
+                const button = event.target;
+                if (button) {
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 上传中...';
+                }
+                
+                // 调用API获取物品详情
+                const itemResponse = await fetch(`/api/steam/workshop/local-items/${itemId}`);
+                if (!itemResponse.ok) {
+                    throw new Error(`HTTP错误，状态码: ${itemResponse.status}`);
+                }
+                
+                const itemData = await itemResponse.json();
+                if (!itemData.success) {
+                    throw new Error(`获取物品详情失败: ${itemData.error || '未知错误'}`);
+                }
+                
+                const item = itemData.item;
+                
+                // 检查预览图片是否存在，如果不存在则尝试查找
+                let previewImage = item.previewImage;
+                if (!previewImage || !await doesFileExist(previewImage)) {
+                    previewImage = await findPreviewImage(item.path);
+                    if (!previewImage) {
+                        showMessage('未找到预览图片，将尝试使用创意工坊默认图片机制', 'warning');
+                    }
+                }
+                
+                // 构建快速上传数据
+                const uploadData = {
+                    title: item.name || '未命名物品',
+                    description: `通过N.E.K.O快速上传于 ${formatDate(new Date())}`,
+                    content_folder: item.path,
+                    preview_image: previewImage || '',
+                    visibility: 0, // 默认公开
+                    tags: item.tags || ['模组'],
+                    allow_comments: true
+                };
+                
+                // 发送API请求
+                const publishResponse = await fetch('/api/steam/workshop/publish', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(uploadData)
+                });
+                
+                if (!publishResponse.ok) {
+                    throw new Error(`HTTP错误，状态码: ${publishResponse.status}`);
+                }
+                
+                const publishData = await publishResponse.json();
+                if (publishData.success) {
+                    showMessage(`🎉 快速上传成功！物品ID: ${publishData.published_file_id}`, 'success');
+                    
+                    // 更新本地数据缓存
+                    if (item.publishDate) {
+                        item.publishDate = new Date();
+                    }
+                    item.publishedFileId = publishData.published_file_id;
+                    
+                    // 重新扫描以更新状态
+                    setTimeout(() => {
+                        scanLocalItems();
+                    }, 1000);
+                } else {
+                    throw new Error(`发布失败: ${publishData.error || '未知错误'}`);
+                }
+            } catch (error) {
+                showMessage(`上传失败: ${error.message}`, 'error');
+            } finally {
+                // 恢复按钮状态
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fa fa-rocket"></i> 快速上传';
+                }
+            }
+        }
+        
+        // 格式化日期
+        function formatDate(timestamp) {
+            if (!timestamp) return '未知';
+            
+            const date = new Date(timestamp);
+            return date.toLocaleDateString();
         }
         
         // 文件路径选择辅助功能
@@ -751,37 +1269,103 @@
             tagElement.parentElement.remove();
         }
         
-        // 消息显示功能
+        // 消息显示功能 - 增强版
         function showMessage(message, type = 'info', duration = 3000) {
-            const messageArea = document.getElementById('message-area');
+            const messageArea = document.getElementById('message-area') || createMessageArea();
             const messageElement = document.createElement('div');
             
-            // 根据消息类型设置样式类
-            if (type === 'error') {
-                messageElement.className = 'error-message';
-            } else if (type === 'warning') {
-                messageElement.className = 'warning-message';
-            } else {
-                messageElement.className = 'success-message';
+            // 创建消息容器（如果不存在）
+            function createMessageArea() {
+                const container = document.createElement('div');
+                container.id = 'message-area';
+                container.className = 'message-area';
+                document.body.appendChild(container);
+                return container;
             }
             
-            messageElement.textContent = message;
+            // 消息类型和图标映射
+            const typeConfig = {
+                error: { className: 'error-message', icon: 'fa-exclamation-circle' },
+                warning: { className: 'warning-message', icon: 'fa-exclamation-triangle' },
+                success: { className: 'success-message', icon: 'fa-check-circle' },
+                info: { className: 'info-message', icon: 'fa-info-circle' }
+            };
+            
+            // 获取当前消息类型的配置
+            const config = typeConfig[type] || typeConfig.info;
+            
+            // 设置样式类
+            messageElement.className = config.className;
+            
+            // 设置消息内容，添加图标和HTML转义
+            messageElement.innerHTML = `
+                <i class="fa ${config.icon}" style="margin-right: 8px;"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
             
             // 添加关闭按钮
             const closeButton = document.createElement('span');
             closeButton.className = 'message-close';
-            closeButton.textContent = '×';
+            closeButton.innerHTML = '<i class="fa fa-times"></i>';
             closeButton.onclick = () => messageElement.remove();
             messageElement.appendChild(closeButton);
             
+            // 为错误消息添加详细信息支持
+            if (type === 'error' && typeof message === 'object') {
+                messageElement.title = JSON.stringify(message, null, 2);
+            }
+            
             // 添加消息
             messageArea.appendChild(messageElement);
+            
+            // 设置初始样式
+            messageElement.style.opacity = '0';
+            messageElement.style.transform = 'translateY(-10px)';
+            messageElement.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+            messageElement.style.display = 'flex';
+            messageElement.style.alignItems = 'center';
+            messageElement.style.padding = '10px 15px';
+            messageElement.style.marginBottom = '10px';
+            messageElement.style.borderRadius = '4px';
+            messageElement.style.position = 'relative';
+            messageElement.style.zIndex = '1000';
+            
+            // 为不同类型设置背景色
+            const bgColors = {
+                error: '#ffebee',
+                warning: '#fff8e1',
+                success: '#e8f5e9',
+                info: '#e3f2fd'
+            };
+            messageElement.style.backgroundColor = bgColors[type] || '#f5f5f5';
             
             // 设置消息显示动画
             setTimeout(() => {
                 messageElement.style.opacity = '1';
                 messageElement.style.transform = 'translateY(0)';
             }, 10);
+            
+            // 确保消息区域在页面顶部且固定
+            messageArea.style.position = 'fixed';
+            messageArea.style.top = '20px';
+            messageArea.style.right = '20px';
+            messageArea.style.maxWidth = '400px';
+            messageArea.style.zIndex = '10000';
+            messageArea.style.display = 'flex';
+            messageArea.style.flexDirection = 'column';
+            messageArea.style.alignItems = 'flex-end';
+            
+            // 关闭按钮样式
+            closeButton.style.position = 'absolute';
+            closeButton.style.right = '10px';
+            closeButton.style.cursor = 'pointer';
+            closeButton.style.fontSize = '16px';
+            closeButton.style.border = 'none';
+            closeButton.style.background = 'none';
+            closeButton.style.padding = '2px 5px';
+            closeButton.style.borderRadius = '3px';
+            closeButton.onmouseover = function() { this.style.backgroundColor = 'rgba(0,0,0,0.1);' };
+            closeButton.onmouseout = function() { this.style.backgroundColor = 'transparent;' };
             
             // 自动清除消息（如果指定了持续时间）
             if (duration > 0) {
@@ -794,6 +1378,89 @@
                 }, duration);
             }
         }
+        
+        // HTML转义函数
+        function escapeHtml(text) {
+            if (typeof text !== 'string') {
+                return String(text);
+            }
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // 加载状态管理器
+        function LoadingManager() {
+            const loadingCount = { value: 0 };
+            
+            return {
+                show: function(message = '加载中...') {
+                    loadingCount.value++;
+                    if (loadingCount.value === 1) {
+                        const loadingOverlay = document.createElement('div');
+                        loadingOverlay.id = 'loading-overlay';
+                        loadingOverlay.style.cssText = `
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(255, 255, 255, 0.8);
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                            z-index: 9999;
+                            backdrop-filter: blur(2px);
+                        `;
+                        
+                        const loadingSpinner = document.createElement('div');
+                        loadingSpinner.style.cssText = `
+                            border: 4px solid #f3f3f3;
+                            border-top: 4px solid #3498db;
+                            border-radius: 50%;
+                            width: 40px;
+                            height: 40px;
+                            animation: spin 1s linear infinite;
+                            margin-bottom: 15px;
+                        `;
+                        
+                        const loadingText = document.createElement('div');
+                        loadingText.textContent = message;
+                        loadingText.style.fontSize = '16px';
+                        loadingText.style.color = '#333';
+                        
+                        // 添加CSS动画
+                        const style = document.createElement('style');
+                        style.textContent = `
+                            @keyframes spin {
+                                0% { transform: rotate(0deg); }
+                                100% { transform: rotate(360deg); }
+                            }
+                        `;
+                        
+                        loadingOverlay.appendChild(loadingSpinner);
+                        loadingOverlay.appendChild(loadingText);
+                        document.body.appendChild(loadingOverlay);
+                        document.body.appendChild(style);
+                    }
+                },
+                
+                hide: function() {
+                    loadingCount.value--;
+                    if (loadingCount.value <= 0) {
+                        loadingCount.value = 0;
+                        const overlay = document.getElementById('loading-overlay');
+                        if (overlay) {
+                            overlay.remove();
+                        }
+                    }
+                }
+            };
+        }
+        
+        // 创建全局加载管理器实例
+        const loading = new LoadingManager();
         
         // 表单验证函数
         function validateForm() {
@@ -867,6 +1534,20 @@
         
         // 上传物品功能
         function uploadItem() {
+            // 检查是否已从本地物品中选择内容
+            const contentFolder = document.getElementById('content-folder').value.trim();
+            const previewImage = document.getElementById('preview-image').value.trim();
+            
+            if (!contentFolder) {
+                showMessage('请先在"管理本地物品"中选择要上传的物品', 'error');
+                return;
+            }
+            
+            if (!previewImage) {
+                showMessage('预览图片路径不能为空，请确保您选择的本地物品包含预览图片', 'error');
+                return;
+            }
+            
             // 验证表单
             if (!validateForm()) {
                 return;
@@ -875,8 +1556,7 @@
             // 收集表单数据
             const title = document.getElementById('item-title').value.trim();
             const description = document.getElementById('item-description').value.trim();
-            const contentFolder = document.getElementById('content-folder').value.trim();
-            const previewImage = document.getElementById('preview-image').value.trim();
+            // 内容文件夹和预览图片路径已经在上面定义过了，不再重复定义
             const visibilitySelect = document.getElementById('visibility');
             const allowComments = document.getElementById('allow-comments').checked;
             
