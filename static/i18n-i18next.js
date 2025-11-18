@@ -2,23 +2,70 @@
  * i18next 初始化文件
  * 使用成熟的 i18next 库管理本地化文本
  * 固定使用中文 (zh-CN)
- * 包含 CDN 加载检查和容错机制
+ * 包含 CDN 加载、检查和容错机制
  * 
  * 使用方式：
- * 1. 在 HTML 中引入 i18next CDN：
- *    <script src="https://cdn.jsdelivr.net/npm/i18next@23.7.6/dist/umd/i18next.min.js" 
- *            onerror="console.error('[i18n] 加载 i18next 失败');"></script>
- *    <script src="https://cdn.jsdelivr.net/npm/i18next-http-backend@2.4.2/dist/umd/i18nextHttpBackend.min.js"
- *            onerror="console.error('[i18n] 加载 i18nextHttpBackend 失败');"></script>
- * 2. 然后引入此文件：
- *    <script src="/static/i18n-i18next.js"></script>
+ * 在 HTML 的 <head> 中引入：
+ * <script src="/static/i18n-i18next.js"></script>
+ * 
+ * 此脚本会自动：
+ * 1. 加载 i18next CDN 库
+ * 2. 检查依赖加载状态
+ * 3. 处理 CDN 容错（备用 CDN）
+ * 4. 初始化 i18next
  */
 
 (function() {
     'use strict';
     
+    // 如果已经初始化过，直接返回
+    if (window.i18nInitialized) {
+        return;
+    }
+    window.i18nInitialized = true;
+    
     // 固定语言为中文
     const TARGET_LANGUAGE = 'zh-CN';
+    
+    // ==================== CDN 动态加载 ====================
+    
+    /**
+     * 动态加载 CDN 脚本
+     */
+    function loadScript(src, onLoad, onError) {
+        // 检查是否已经加载
+        const existingScript = document.querySelector(`script[src="${src}"]`);
+        if (existingScript) {
+            if (onLoad) onLoad();
+            return;
+        }
+        
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = onLoad || function() {};
+        script.onerror = onError || function() {
+            console.error(`[i18n] 加载脚本失败: ${src}`);
+        };
+        document.head.appendChild(script);
+    }
+    
+    // 加载 i18next 核心库
+    loadScript(
+        'https://cdn.jsdelivr.net/npm/i18next@23.7.6/dist/umd/i18next.min.js',
+        null,
+        function() {
+            console.error('[i18n] 加载 i18next 失败');
+        }
+    );
+    
+    // 加载 i18next HTTP Backend
+    loadScript(
+        'https://cdn.jsdelivr.net/npm/i18next-http-backend@2.4.2/dist/umd/i18nextHttpBackend.min.js',
+        null,
+        function() {
+            console.error('[i18n] 加载 i18nextHttpBackend 失败');
+        }
+    );
     
     // ==================== CDN 加载检查和容错机制 ====================
     
@@ -44,24 +91,24 @@
             // 如果 i18nextHttpBackend 未加载，尝试备用 CDN
             if (!backendLoaded) {
                 console.log('[i18n] 尝试从 unpkg CDN 加载 i18nextHttpBackend...');
-                const backupScript = document.createElement('script');
-                backupScript.src = 'https://unpkg.com/i18next-http-backend@2.4.2/dist/umd/i18nextHttpBackend.min.js';
-                backupScript.onload = function() {
-                    console.log('[i18n] ✅ 备用 CDN 加载成功');
-                    // 再次检查并初始化
-                    setTimeout(() => {
-                        if (typeof i18nextHttpBackend !== 'undefined') {
-                            initI18next();
-                        } else {
-                            initI18nextWithoutBackend();
-                        }
-                    }, 100);
-                };
-                backupScript.onerror = function() {
-                    console.error('[i18n] ❌ 备用 CDN 也加载失败，使用降级方案');
-                    initI18nextWithoutBackend();
-                };
-                document.head.appendChild(backupScript);
+                loadScript(
+                    'https://unpkg.com/i18next-http-backend@2.4.2/dist/umd/i18nextHttpBackend.min.js',
+                    function() {
+                        console.log('[i18n] ✅ 备用 CDN 加载成功');
+                        // 再次检查并初始化
+                        setTimeout(() => {
+                            if (typeof i18nextHttpBackend !== 'undefined') {
+                                initI18next();
+                            } else {
+                                initI18nextWithoutBackend();
+                            }
+                        }, 100);
+                    },
+                    function() {
+                        console.error('[i18n] ❌ 备用 CDN 也加载失败，使用降级方案');
+                        initI18nextWithoutBackend();
+                    }
+                );
             } else if (!i18nextLoaded) {
                 // i18next 未加载，无法继续
                 console.error('[i18n] ❌ i18next 核心库未加载，无法初始化');

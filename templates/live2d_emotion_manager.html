@@ -5,12 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title data-i18n="emotion.manager">Live2D 情感映射管理器</title>
-    <!-- i18next 核心库 -->
-    <script src="https://cdn.jsdelivr.net/npm/i18next@23.7.6/dist/umd/i18next.min.js" 
-            onerror="console.error('[i18n] 加载 i18next 失败');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/i18next-http-backend@2.4.2/dist/umd/i18nextHttpBackend.min.js"
-            onerror="console.error('[i18n] 加载 i18nextHttpBackend 失败');"></script>
-    <!-- i18next 初始化脚本（包含 CDN 容错机制） -->
+    <!-- i18next 加载器（统一处理 CDN 加载和初始化） -->
     <script src="/static/i18n-i18next.js"></script>
     <script src="/static/common_dialogs.js"></script>
     <style>
