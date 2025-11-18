@@ -234,7 +234,7 @@
         window.updateLive2DDynamicTexts = updateLive2DDynamicTexts;
         window.translateStatusMessage = translateStatusMessage;
         
-        // 监听语言变化（仅用于更新文本，不切换语言）
+        // 监听语言变化（用于更新文本）
         i18next.on('languageChanged', (lng) => {
             updatePageTexts();
             updateLive2DDynamicTexts();

@@ -2162,23 +2162,6 @@ function init_app(){
                 settingsPopupInitialized = true;
                 console.log('设置弹出框已初始化');
                 
-                // 监听语言切换事件，更新设置弹出框中的文本
-                const updateSettingsPopupTexts = () => {
-                    if (popup) {
-                        popup.querySelectorAll('[data-i18n]').forEach(element => {
-                            const key = element.getAttribute('data-i18n');
-                            if (key && window.t) {
-                                element.textContent = window.t(key);
-                            }
-                        });
-                    }
-                };
-                
-                // 立即更新一次（如果语言已切换）
-                updateSettingsPopupTexts();
-                
-                // 监听语言切换事件
-                window.addEventListener('localechange', updateSettingsPopupTexts);
             }
         }
     });
