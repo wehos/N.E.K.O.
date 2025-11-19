@@ -256,7 +256,16 @@
     "saveFailedGeneral": "保存失败!",
     "uploadSuccess": "✓ {message}",
     "uploadFailed": "✗ {error}",
-    "uploadError": "✗ 上传失败: {error}"
+    "uploadError": "✗ 上传失败: {error}",
+    "toggleFullscreen": "切换全屏",
+    "exitFullscreen": "退出全屏",
+    "modelFilesFetchFailed": "无法获取模型文件列表",
+    "modelConfigFetchFailed": "无法获取模型配置: {status}",
+    "updatedPersistentExpression": "已更新常驻表情",
+    "appliedPersistentExpression": "常驻表情已应用",
+    "savingPersistentExpression": "正在保存常驻表情...",
+    "persistentExpressionSaved": "常驻表情保存成功",
+    "persistentExpressionSaveFailed": "保存常驻表情失败"
   },
   "voice": {
     "title": "音色注册",

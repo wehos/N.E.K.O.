@@ -325,15 +325,15 @@
             const fullscreenBtn = document.createElement('button');
             fullscreenBtn.id = 'fullscreen-btn';
             fullscreenBtn.className = 'btn btn-primary';
-            fullscreenBtn.textContent = '切换全屏';
+            fullscreenBtn.textContent = window.t ? window.t('live2d.toggleFullscreen') : '切换全屏';
             fullscreenBtn.onclick = async () => {
                 try {
                     if (isFullscreen()) {
                         await exitFullscreen();
-                        fullscreenBtn.textContent = '切换全屏';
+                        fullscreenBtn.textContent = window.t ? window.t('live2d.toggleFullscreen') : '切换全屏';
                     } else {
                         await requestFullscreen();
-                        fullscreenBtn.textContent = '退出全屏';
+                        fullscreenBtn.textContent = window.t ? window.t('live2d.exitFullscreen') : '退出全屏';
                     }
                 } catch (e) {
                     console.log('切换全屏失败:', e);
@@ -357,9 +357,9 @@
             const fullscreenBtn = document.getElementById('fullscreen-btn');
             if (fullscreenBtn) {
                 if (isFullscreen()) {
-                    fullscreenBtn.textContent = '退出全屏';
+                    fullscreenBtn.textContent = window.t ? window.t('live2d.exitFullscreen') : '退出全屏';
                 } else {
-                    fullscreenBtn.textContent = '切换全屏';
+                    fullscreenBtn.textContent = window.t ? window.t('live2d.toggleFullscreen') : '切换全屏';
                 }
             }
         }
@@ -508,13 +508,13 @@
                 // 1. Fetch files list
                 const filesRes = await fetch(`/api/live2d/model_files/${modelName}`);
                 const filesData = await filesRes.json();
-                if (!filesData.success) throw new Error('无法获取模型文件列表');
+                if (!filesData.success) throw new Error(window.t ? window.t('live2d.modelFilesFetchFailed') : '无法获取模型文件列表');
                 currentModelFiles = filesData;
 
                 // 2. Fetch model config
                 const modelJsonUrl = modelInfo.path;
                 const modelConfigRes = await fetch(modelJsonUrl);
-                if (!modelConfigRes.ok) throw new Error(`无法获取模型配置: ${modelConfigRes.statusText}`);
+                if (!modelConfigRes.ok) throw new Error(window.t ? window.t('live2d.modelConfigFetchFailed', {status: modelConfigRes.statusText}) : `无法获取模型配置: ${modelConfigRes.statusText}`);
                 const modelConfig = await modelConfigRes.json();
                 
                 // 3. Add URL context for the loader
@@ -901,9 +901,10 @@
             } else {
                 persistentList.innerHTML = currentPersistent.map(f => {
                     const name = f.split('/').pop().replace('.exp3.json','');
+                    const removeLabel = window.t ? window.t('common.delete') : '移除';
                     return `<div style="display:flex; align-items:center; justify-content:space-between; padding:4px 6px; border-bottom:1px dashed #eee;">
                         <span>${name}</span>
-                        <button data-file="${f}" class="btn btn-secondary" style="padding:4px 8px; font-size:12px;">移除</button>
+                        <button data-file="${f}" class="btn btn-secondary" style="padding:4px 8px; font-size:12px;">${removeLabel}</button>
                     </div>`;
                 }).join('');
                 // 绑定移除
@@ -922,7 +923,7 @@
                                 if (!mgr.emotionMapping.expressions) mgr.emotionMapping.expressions = {};
                                 mgr.emotionMapping.expressions['常驻'] = [...currentPersistent];
                                 await mgr.setupPersistentExpressions();
-                                showStatus('已更新常驻表情', 1200);
+                                showStatus(window.t ? window.t('live2d.updatedPersistentExpression') : '已更新常驻表情', 1200);
                             }
                         } catch (e) { console.warn('应用常驻表情失败:', e); }
                     };
@@ -950,14 +951,14 @@
                     if (!mgr.emotionMapping.expressions) mgr.emotionMapping.expressions = {};
                     mgr.emotionMapping.expressions['常驻'] = [...currentPersistent];
                     await mgr.setupPersistentExpressions();
-                    showStatus('常驻表情已应用', 1200);
+                    showStatus(window.t ? window.t('live2d.appliedPersistentExpression') : '常驻表情已应用', 1200);
                 }
             } catch (e) { console.warn('应用常驻表情失败:', e); }
         });
 
         savePersistentBtn.addEventListener('click', async () => {
             if (!currentModelInfo) return;
-            showStatus('正在保存常驻表情...');
+            showStatus(window.t ? window.t('live2d.savingPersistentExpression') : '正在保存常驻表情...');
             try {
                 // 合并旧映射：保留 motions，保留 expressions 其他组，仅替换 常驻 组
                 const motions = (currentEmotionMapping && currentEmotionMapping.motions) ? currentEmotionMapping.motions : {};
@@ -972,18 +973,18 @@
                 });
                 const result = await resp.json();
                 if (result && result.success) {
-                    showStatus('常驻表情保存成功', 1500);
+                    showStatus(window.t ? window.t('live2d.persistentExpressionSaved') : '常驻表情保存成功', 1500);
                     window.hasUnsavedChanges = false; // 保存成功后重置标志
                     // 通知前端管理器重新应用常驻，无需重载模型
                     if (window.live2dManager && window.live2dManager.setupPersistentExpressions) {
                         await window.live2dManager.setupPersistentExpressions();
                     }
                 } else {
-                    showStatus('保存常驻表情失败', 2000);
+                    showStatus(window.t ? window.t('live2d.persistentExpressionSaveFailed') : '保存常驻表情失败', 2000);
                 }
             } catch (e) {
                 console.error(e);
-                showStatus('保存常驻表情失败', 2000);
+                showStatus(window.t ? window.t('live2d.persistentExpressionSaveFailed') : '保存常驻表情失败', 2000);
             }
         });
 

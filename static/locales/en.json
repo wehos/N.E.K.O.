@@ -266,7 +266,16 @@
     "saveFailedGeneral": "Save failed!",
     "uploadSuccess": "✓ {message}",
     "uploadFailed": "✗ {error}",
-    "uploadError": "✗ Upload failed: {error}"
+    "uploadError": "✗ Upload failed: {error}",
+    "toggleFullscreen": "Toggle Fullscreen",
+    "exitFullscreen": "Exit Fullscreen",
+    "modelFilesFetchFailed": "Failed to fetch model files list",
+    "modelConfigFetchFailed": "Failed to fetch model config: {status}",
+    "updatedPersistentExpression": "Updated persistent expression",
+    "appliedPersistentExpression": "Persistent expression applied",
+    "savingPersistentExpression": "Saving persistent expression...",
+    "persistentExpressionSaved": "Persistent expression saved successfully",
+    "persistentExpressionSaveFailed": "Failed to save persistent expression"
   },
   "voice": {
     "title": "Voice Registration",
