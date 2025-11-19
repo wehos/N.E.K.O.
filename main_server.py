@@ -14,6 +14,9 @@ import threading
 import time
 from urllib.parse import quote, unquote
 
+# 开发模式标志 - 在生产环境中设置为False
+DEVELOPMENT_MODE = True
+
 # 默认的创意工坊物品文件夹路径
 DEFAULT_WORKSHOP_FOLDER = os.path.join(os.path.expanduser('~'), 'Documents', 'Xiao8', 'live2d')
 
@@ -1276,17 +1279,9 @@ async def get_subscribed_workshop_items():
                         item_info["installedFolder"] = str(folder_path) if folder_path else None
                         logger.debug(f'物品 {item_id} 的安装路径: {item_info["installedFolder"]}')
                         
-                        # 处理磁盘大小 - 根据workshop.py的实现，disk_size是ctypes指针对象
-                        disk_size = result.get('disk_size')
-                        try:
-                            # 从ctypes指针对象中获取整数值
-                            if hasattr(disk_size, 'value'):
-                                item_info["fileSizeOnDisk"] = int(disk_size.value)
-                            else:
-                                item_info["fileSizeOnDisk"] = 0
-                        except:
-                            logger.warning(f'无法获取物品 {item_id} 的磁盘大小值')
-                            item_info["fileSizeOnDisk"] = 0
+                        # 处理磁盘大小 - GetItemInstallInfo返回的disk_size是普通整数
+                        disk_size = result.get('disk_size', 0)
+                        item_info["fileSizeOnDisk"] = int(disk_size) if isinstance(disk_size, (int, float)) else 0
                     # 也支持元组格式作为备选
                     elif isinstance(result, tuple) and len(result) >= 3:
                         installed, folder, size = result
@@ -1317,85 +1312,45 @@ async def get_subscribed_workshop_items():
                     if isinstance(result, dict):
                         logger.debug(f'物品 {item_id} 下载信息字典: {result}')
                         
-                        # 假设字典格式中可能包含的键
-                        downloading = result.get('downloading', False)
-                        item_info["state"]["downloading"] = bool(downloading)
+                        # 使用正确的键名获取下载信息
+                        downloaded = result.get('downloaded', 0)
+                        total = result.get('total', 0)
+                        progress = result.get('progress', 0.0)
                         
-                        # 如果正在下载，尝试获取下载进度信息
-                        if downloading:
-                            # 获取已下载和总字节数
-                            bytes_downloaded = result.get('bytes_downloaded', 0)
-                            bytes_total = result.get('bytes_total', 0)
-                            
-                            # 处理ctypes对象和其他类型
-                            try:
-                                # 处理已下载字节数
-                                if hasattr(bytes_downloaded, 'value'):
-                                    bd_value = int(bytes_downloaded.value)
-                                elif isinstance(bytes_downloaded, (int, float)):
-                                    bd_value = int(bytes_downloaded)
-                                else:
-                                    bd_value = 0
-                                
-                                # 处理总字节数
-                                if hasattr(bytes_total, 'value'):
-                                    bt_value = int(bytes_total.value)
-                                elif isinstance(bytes_total, (int, float)):
-                                    bt_value = int(bytes_total)
-                                else:
-                                    bt_value = 0
-                                
-                                item_info["downloadProgress"] = {
-                                    "bytesDownloaded": bd_value,
-                                    "bytesTotal": bt_value,
-                                    "percentage": (bd_value / bt_value * 100) if bt_value > 0 else 0
-                                }
-                            except:
-                                item_info["downloadProgress"] = {
-                                    "bytesDownloaded": 0,
-                                    "bytesTotal": 0,
-                                    "percentage": 0
-                                }
+                        # 根据total和downloaded确定是否正在下载
+                        item_info["state"]["downloading"] = total > 0 and downloaded < total
+                        
+                        # 设置下载进度信息
+                        if downloaded > 0 or total > 0:
+                            item_info["downloadProgress"] = {
+                                "bytesDownloaded": int(downloaded),
+                                "bytesTotal": int(total),
+                                "percentage": progress * 100 if isinstance(progress, (int, float)) else 0
+                            }
                     # 也支持元组格式作为备选
                     elif isinstance(result, tuple) and len(result) >= 3:
-                        downloading, bytes_downloaded, bytes_total = result
-                        logger.debug(f'物品 {item_id} 下载状态: 下载中={downloading}, 已下载={bytes_downloaded}, 总计={bytes_total}')
+                        # 元组中应该包含下载状态、已下载字节数和总字节数
+                        downloaded, total, progress = result if len(result) >= 3 else (0, 0, 0.0)
+                        logger.debug(f'物品 {item_id} 下载状态: 已下载={downloaded}, 总计={total}, 进度={progress}')
                         
-                        # 确保下载状态是布尔值
-                        downloading = bool(downloading)
-                        item_info["state"]["downloading"] = downloading
+                        # 根据total和downloaded确定是否正在下载
+                        item_info["state"]["downloading"] = total > 0 and downloaded < total
                         
-                        # 处理字节数值
-                        if downloading:
-                            # 处理ctypes对象和其他类型
+                        # 设置下载进度信息
+                        if downloaded > 0 or total > 0:
+                            # 处理可能的类型转换
                             try:
-                                # 处理已下载字节数
-                                if hasattr(bytes_downloaded, 'value'):
-                                    bd_value = int(bytes_downloaded.value)
-                                elif isinstance(bytes_downloaded, (int, float)):
-                                    bd_value = int(bytes_downloaded)
-                                else:
-                                    bd_value = 0
-                                
-                                # 处理总字节数
-                                if hasattr(bytes_total, 'value'):
-                                    bt_value = int(bytes_total.value)
-                                elif isinstance(bytes_total, (int, float)):
-                                    bt_value = int(bytes_total)
-                                else:
-                                    bt_value = 0
-                                
-                                item_info["downloadProgress"] = {
-                                    "bytesDownloaded": bd_value,
-                                    "bytesTotal": bt_value,
-                                    "percentage": (bd_value / bt_value * 100) if bt_value > 0 else 0
-                                }
+                                downloaded_value = int(downloaded.value) if hasattr(downloaded, 'value') else int(downloaded)
+                                total_value = int(total.value) if hasattr(total, 'value') else int(total)
+                                progress_value = float(progress.value) if hasattr(progress, 'value') else float(progress)
                             except:
-                                item_info["downloadProgress"] = {
-                                    "bytesDownloaded": 0,
-                                    "bytesTotal": 0,
-                                    "percentage": 0
-                                }
+                                downloaded_value, total_value, progress_value = 0, 0, 0.0
+                                
+                            item_info["downloadProgress"] = {
+                                "bytesDownloaded": downloaded_value,
+                                "bytesTotal": total_value,
+                                "percentage": progress_value * 100
+                            }
                     else:
                         logger.warning(f'物品 {item_id} 的下载信息返回格式未知: {type(result)} - {result}')
                         item_info["state"]["downloading"] = False
@@ -1613,13 +1568,12 @@ async def get_workshop_item_path(item_id: str):
         }
         
         # 如果有磁盘大小信息，也一并返回
-        if 'disk_size' in install_info:
-            try:
-                disk_size = install_info['disk_size']
-                if hasattr(disk_size, 'value'):
-                    response['size_on_disk'] = int(disk_size.value)
-            except:
-                pass
+        try:
+            disk_size = install_info.get('disk_size')
+            if isinstance(disk_size, (int, float)):
+                response['size_on_disk'] = int(disk_size)
+        except:
+            pass
         
         return response
         
@@ -1677,12 +1631,9 @@ async def get_workshop_item_details(item_id: str):
                 installed = bool(install_info)
                 folder = install_info.get('folder', '') if installed else ''
                 size = 0
-                if installed and 'disk_size' in install_info:
-                    try:
-                        if hasattr(install_info['disk_size'], 'value'):
-                            size = int(install_info['disk_size'].value)
-                    except:
-                        size = 0
+                disk_size = install_info.get('disk_size')
+                if isinstance(disk_size, (int, float)):
+                    size = int(disk_size)
                 
                 # 获取物品下载信息
                 download_info = steamworks.Workshop.GetItemDownloadInfo(item_id_int)
@@ -1821,23 +1772,13 @@ async def unsubscribe_workshop_item(request: Request):
         
         # 调用Steamworks的UnsubscribeItem方法，并提供回调函数
         steamworks.Workshop.UnsubscribeItem(item_id_int, callback=unsubscribe_callback)
-        # 由于回调是异步的，这里我们假设操作已开始，稍后通过回调获取实际结果
-        result = True
-        
-        # 检查操作结果
-        if result:
-            logger.info(f"成功取消订阅物品: {item_id_int}")
-            return {
-                "success": True,
-                "message": "已成功取消订阅该物品"
-            }
-        else:
-            logger.warning(f"取消订阅物品失败: {item_id_int}")
-            return JSONResponse({
-                "success": False,
-                "error": "取消订阅失败",
-                "message": "无法取消订阅该物品，请检查物品ID是否正确"
-            }, status_code=500)
+        # 由于回调是异步的，我们返回请求已被接受处理的状态
+        logger.info(f"取消订阅请求已被接受，正在处理: {item_id_int}")
+        return {
+            "success": True,
+            "status": "accepted",
+            "message": "取消订阅请求已被接受，正在处理中。实际结果将在后台异步完成。"
+        }
             
     except Exception as e:
         logger.error(f"取消订阅物品时出错: {e}")
@@ -2905,34 +2846,45 @@ async def scan_local_workshop_items(request: Request):
         logger.info(f'请求数据: {data}')
         folder_path = data.get('folder_path')
         
+        # 安全检查：始终使用DEFAULT_WORKSHOP_FOLDER作为基础目录
+        base_workshop_folder = os.path.abspath(os.path.normpath(DEFAULT_WORKSHOP_FOLDER))
+        
         # 如果没有提供路径，使用默认路径
         default_path_used = False
         if not folder_path:
-            # 优先使用常量DEFAULT_WORKSHOP_FOLDER，确保使用用户指定的路径
-            folder_path = DEFAULT_WORKSHOP_FOLDER
+            # 优先使用常量DEFAULT_WORKSHOP_FOLDER
+            folder_path = base_workshop_folder
             default_path_used = True
             logger.info(f'未提供文件夹路径，强制使用默认路径: {folder_path}')
-            logger.info(f'DEFAULT_WORKSHOP_FOLDER原始值: {DEFAULT_WORKSHOP_FOLDER}')
-            logger.info(f'workshop_config中的default_workshop_folder值: {workshop_config.get("default_workshop_folder")}')
-            logger.info(f'路径解析前 - 使用os.path.expanduser("~")的结果: {os.path.expanduser("~")}')
             # 确保默认文件夹存在
             ensure_workshop_folder_exists(folder_path)
+        else:
+            # 如果提供了路径，确保它在基础目录内（防止路径遍历攻击）
+            original_path = folder_path
+            # 标准化路径
+            folder_path = os.path.normpath(folder_path)
+            
+            # 确保路径是绝对路径
+            if not os.path.isabs(folder_path):
+                # 如果是相对路径，将其解析为基于基础目录的路径
+                folder_path = os.path.join(base_workshop_folder, folder_path)
+                folder_path = os.path.normpath(folder_path)
+            
+            # 关键安全检查：验证路径是否在基础目录内
+            if not folder_path.startswith(base_workshop_folder):
+                logger.warning(f'路径遍历尝试被拒绝: {original_path}')
+                return JSONResponse(content={"success": False, "error": "访问被拒绝: 路径不在允许的范围内"}, status_code=403)
         
-        # 标准化路径，处理不同格式的输入
-        original_path = folder_path
-        folder_path = os.path.normpath(folder_path)
-        logger.info(f'路径标准化前: {original_path}')
         logger.info(f'路径标准化后: {folder_path}')
         logger.info(f'最终使用的文件夹路径: {folder_path}, 默认路径使用状态: {default_path_used}')
-        logger.info(f'路径是否为绝对路径: {os.path.isabs(folder_path)}')
         
         if not os.path.exists(folder_path):
             logger.warning(f'文件夹不存在: {folder_path}')
-            return JSONResponse(content={"success": False, "error": f"指定的文件夹不存在: {folder_path}", "default_path_used": default_path_used}, status_code=404)
+            return JSONResponse(content={"success": False, "error": f"指定的文件夹不存在: {os.path.basename(folder_path)}", "default_path_used": default_path_used}, status_code=404)
         
         if not os.path.isdir(folder_path):
             logger.warning(f'指定的路径不是文件夹: {folder_path}')
-            return JSONResponse(content={"success": False, "error": f"指定的路径不是文件夹: {folder_path}", "default_path_used": default_path_used}, status_code=400)
+            return JSONResponse(content={"success": False, "error": f"指定的路径不是文件夹: {os.path.basename(folder_path)}", "default_path_used": default_path_used}, status_code=400)
         
         # 扫描本地创意工坊物品
         local_items = []
@@ -2943,25 +2895,46 @@ async def scan_local_workshop_items(request: Request):
         for item_folder in os.listdir(folder_path):
             item_path = os.path.join(folder_path, item_folder)
             if os.path.isdir(item_path):
+                # 安全检查：确保子目录仍然在基础目录内
+                if not item_path.startswith(base_workshop_folder):
+                    logger.warning(f'跳过超出基础目录的子文件夹: {item_path}')
+                    continue
+                
                 # 直接添加所有子文件夹，不检查内部文件结构
                 stat_info = os.stat(item_path)
+                
+                # 计算相对路径，避免返回绝对路径
+                relative_path = os.path.relpath(item_path, base_workshop_folder)
+                
+                # 处理预览图路径（如果有）
+                preview_image = find_preview_image_in_folder(item_path)
+                preview_image_rel = None
+                if preview_image:
+                    # 确保预览图路径也在基础目录内
+                    if preview_image.startswith(base_workshop_folder):
+                        preview_image_rel = os.path.relpath(preview_image, base_workshop_folder)
+                
                 local_items.append({
                     "id": f"local_{item_id}",
                     "name": item_folder,
-                    "path": item_path,
+                    "path": relative_path,  # 返回相对路径而不是绝对路径
                     "lastModified": stat_info.st_mtime,
                     "size": get_folder_size(item_path),
                     "tags": ["本地文件"],
-                    "previewImage": find_preview_image_in_folder(item_path)
+                    "previewImage": preview_image_rel  # 返回相对路径
                 })
                 item_id += 1
         
         logger.info(f"扫描完成，找到 {len(local_items)} 个本地创意工坊物品")
+        
+        # 计算相对文件夹路径用于返回
+        relative_folder_path = os.path.relpath(folder_path, base_workshop_folder)
+        
         return JSONResponse(content={
             "success": True,
             "local_items": local_items,
             "published_items": published_items,
-            "folder_path": folder_path,
+            "folder_path": relative_folder_path,  # 返回相对路径
             "default_path_used": default_path_used
         })
         
@@ -3006,15 +2979,67 @@ async def save_workshop_config_api(config_data: dict):
 
 @app.get('/api/proxy-image')
 async def proxy_image(image_path: str):
-    """代理访问本地图片文件，支持绝对路径和相对路径"""
+    """代理访问本地图片文件，支持绝对路径和相对路径，特别是Steam创意工坊目录"""
+    # 在函数开头就声明全局变量，避免使用前未声明的语法错误
+    global DEFAULT_WORKSHOP_FOLDER
     try:
-        # 解码URL编码的路径
+        logger.info(f"代理图片请求，原始路径: {image_path}")
+        
+        # 解码URL编码的路径（处理双重编码情况）
         decoded_path = unquote(image_path)
+        # 再次解码以处理可能的双重编码
+        decoded_path = unquote(decoded_path)
+        
+        logger.info(f"解码后的路径: {decoded_path}")
         
         # 检查是否是远程URL，如果是则直接返回错误（目前只支持本地文件）
         if decoded_path.startswith(('http://', 'https://')):
             return JSONResponse(content={"success": False, "error": "暂不支持远程图片URL"}, status_code=400)
         
+        # 获取基础目录和允许访问的目录列表
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        allowed_dirs = [
+            os.path.realpath(os.path.join(base_dir, 'static')),
+            os.path.realpath(os.path.join(base_dir, 'assets'))
+        ]
+        
+        # 添加"我的文档/Xiao8"目录
+        if os.name == 'nt':  # Windows系统
+            documents_path = os.path.join(os.path.expanduser('~'), 'Documents', 'Xiao8')
+            # 确保目录存在并添加到允许列表
+            if os.path.exists(documents_path):
+                real_doc_path = os.path.realpath(documents_path)
+                allowed_dirs.append(real_doc_path)
+                logger.info(f"添加允许的文档目录: {real_doc_path}")
+        
+        # 添加Steam创意工坊目录（支持Windows平台）
+        if os.name == 'nt':
+            steam_workshop_dirs = [
+                os.path.join(os.environ.get('ProgramFiles', 'C:/Program Files'), 'Valve/steamapps/workshop/content'),
+                os.path.join(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)'), 'Steam/steamapps/workshop/content'),
+                # 增加常见的Steam安装路径
+                os.path.join('D:/', 'Program Files', 'Valve', 'steamapps', 'workshop', 'content'),
+                os.path.join('D:/', 'Program Files (x86)', 'Steam', 'steamapps', 'workshop', 'content')
+            ]
+            for workshop_dir in steam_workshop_dirs:
+                if os.path.exists(workshop_dir):
+                    real_dir = os.path.realpath(workshop_dir)
+                    allowed_dirs.append(real_dir)
+                    logger.info(f"添加允许的Steam创意工坊目录: {real_dir}")
+        
+        # 添加DEFAULT_WORKSHOP_FOLDER作为允许目录，支持相对路径解析
+        try:
+            workshop_base_dir = os.path.abspath(os.path.normpath(DEFAULT_WORKSHOP_FOLDER))
+            if os.path.exists(workshop_base_dir):
+                real_workshop_dir = os.path.realpath(workshop_base_dir)
+                if real_workshop_dir not in allowed_dirs:
+                    allowed_dirs.append(real_workshop_dir)
+                    logger.info(f"添加允许的默认创意工坊目录: {real_workshop_dir}")
+        except Exception as e:
+            logger.warning(f"无法添加默认创意工坊目录: {str(e)}")
+        
+        logger.info(f"当前允许的目录列表: {allowed_dirs}")
+
         # Windows路径处理：确保路径分隔符正确
         if os.name == 'nt':  # Windows系统
             # 替换可能的斜杠为反斜杠，确保Windows路径格式正确
@@ -3023,43 +3048,91 @@ async def proxy_image(image_path: str):
             if decoded_path.startswith('\\\\'):
                 decoded_path = decoded_path[2:]  # 移除多余的反斜杠前缀
         
-        # 安全检查：确保文件存在且是图片文件
-        if not os.path.exists(decoded_path) or not os.path.isfile(decoded_path):
-            # 尝试备选路径格式
+        # 尝试解析路径
+        final_path = None
+        
+        # 尝试作为绝对路径
+        if os.path.exists(decoded_path) and os.path.isfile(decoded_path):
+            # 规范化路径以防止路径遍历攻击
+            real_path = os.path.realpath(decoded_path)
+            # 检查路径是否在允许的目录内
+            if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+                final_path = real_path
+        
+        # 尝试备选路径格式
+        if final_path is None:
             alt_path = decoded_path.replace('\\', '/')
             if os.path.exists(alt_path) and os.path.isfile(alt_path):
-                decoded_path = alt_path
-            else:
-                # 尝试相对路径处理 - 假设是相对于static目录
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                static_dir = os.path.join(base_dir, 'static')
+                real_path = os.path.realpath(alt_path)
+                if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+                    final_path = real_path
+        
+        # 尝试相对路径处理 - 相对于static目录
+        if final_path is None:
+            # 对于以../static开头的相对路径，尝试直接从static目录解析
+            if decoded_path.startswith('..\\static') or decoded_path.startswith('../static'):
+                # 提取static后面的部分
+                relative_part = decoded_path.split('static')[1]
+                if relative_part.startswith(('\\', '/')):
+                    relative_part = relative_part[1:]
+                # 构建完整路径
+                relative_path = os.path.join(allowed_dirs[0], relative_part)  # static目录
+                if os.path.exists(relative_path) and os.path.isfile(relative_path):
+                    real_path = os.path.realpath(relative_path)
+                    if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+                        final_path = real_path
+        
+        # 尝试相对于默认创意工坊目录的路径处理
+        if final_path is None:
+            try:
+                workshop_base_dir = os.path.abspath(os.path.normpath(DEFAULT_WORKSHOP_FOLDER))
                 
-                # 对于以../static开头的相对路径，尝试直接从static目录解析
-                if decoded_path.startswith('..\\static') or decoded_path.startswith('../static'):
-                    # 提取static后面的部分
-                    relative_part = decoded_path.split('static')[1]
-                    if relative_part.startswith(('\\', '/')):
-                        relative_part = relative_part[1:]
-                    # 构建完整路径
-                    relative_path = os.path.join(static_dir, relative_part)
-                    if os.path.exists(relative_path) and os.path.isfile(relative_path):
-                        decoded_path = relative_path
-                    else:
-                        return JSONResponse(content={"success": False, "error": f"文件不存在: {decoded_path}"}, status_code=404)
-                else:
-                    return JSONResponse(content={"success": False, "error": f"文件不存在: {decoded_path}"}, status_code=404)
+                # 尝试将解码路径作为相对于创意工坊目录的路径
+                rel_workshop_path = os.path.join(workshop_base_dir, decoded_path)
+                rel_workshop_path = os.path.normpath(rel_workshop_path)
+                
+                logger.info(f"尝试相对于创意工坊目录的路径: {rel_workshop_path}")
+                
+                if os.path.exists(rel_workshop_path) and os.path.isfile(rel_workshop_path):
+                    real_path = os.path.realpath(rel_workshop_path)
+                    # 确保路径在允许的目录内
+                    if real_path.startswith(workshop_base_dir):
+                        final_path = real_path
+                        logger.info(f"找到相对于创意工坊目录的图片: {final_path}")
+            except Exception as e:
+                logger.warning(f"处理相对于创意工坊目录的路径失败: {str(e)}")
+        
+        # 特殊处理"我的文档/Xiao8"目录下的相对路径
+        if final_path is None and os.name == 'nt':
+            documents_path = os.path.join(os.path.expanduser('~'), 'Documents', 'Xiao8')
+            if os.path.exists(documents_path):
+                # 尝试将解码路径作为相对于"我的文档/Xiao8"的路径
+                rel_doc_path = os.path.join(documents_path, decoded_path)
+                rel_doc_path = os.path.normpath(rel_doc_path)
+                
+                logger.info(f"尝试相对于文档目录的路径: {rel_doc_path}")
+                
+                if os.path.exists(rel_doc_path) and os.path.isfile(rel_doc_path):
+                    real_path = os.path.realpath(rel_doc_path)
+                    if real_path.startswith(os.path.realpath(documents_path)):
+                        final_path = real_path
+                        logger.info(f"找到相对于文档目录的图片: {final_path}")
+        
+        # 如果仍未找到有效路径，返回错误
+        if final_path is None:
+            return JSONResponse(content={"success": False, "error": f"文件不存在或无访问权限: {decoded_path}"}, status_code=404)
         
         # 检查文件扩展名是否为图片
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
-        if os.path.splitext(decoded_path)[1].lower() not in image_extensions:
+        if os.path.splitext(final_path)[1].lower() not in image_extensions:
             return JSONResponse(content={"success": False, "error": "不是有效的图片文件"}, status_code=400)
         
         # 读取图片文件
-        with open(decoded_path, 'rb') as f:
+        with open(final_path, 'rb') as f:
             image_data = f.read()
         
         # 根据文件扩展名设置MIME类型
-        ext = os.path.splitext(decoded_path)[1].lower()
+        ext = os.path.splitext(final_path)[1].lower()
         mime_type = {
             '.jpg': 'image/jpeg',
             '.jpeg': 'image/jpeg',
@@ -3086,6 +3159,9 @@ async def get_local_workshop_item(item_id: str, folder_path: str = None):
         if not folder_path:
             return JSONResponse(content={"success": False, "error": "未提供文件夹路径"}, status_code=400)
         
+        # 安全检查：始终使用DEFAULT_WORKSHOP_FOLDER作为基础目录
+        base_workshop_folder = os.path.abspath(os.path.normpath(DEFAULT_WORKSHOP_FOLDER))
+        
         # Windows路径处理：确保路径分隔符正确
         if os.name == 'nt':  # Windows系统
             # 解码并处理Windows路径
@@ -3095,7 +3171,27 @@ async def get_local_workshop_item(item_id: str, folder_path: str = None):
             # 处理可能的双重编码问题
             if decoded_folder_path.startswith('\\\\'):
                 decoded_folder_path = decoded_folder_path[2:]  # 移除多余的反斜杠前缀
-            folder_path = decoded_folder_path
+        else:
+            decoded_folder_path = unquote(folder_path)
+        
+        # 关键修复：将相对路径转换为基于基础目录的绝对路径
+        # 确保路径是绝对路径，如果不是则视为相对路径
+        if not os.path.isabs(decoded_folder_path):
+            # 将相对路径转换为基于基础目录的绝对路径
+            full_path = os.path.join(base_workshop_folder, decoded_folder_path)
+        else:
+            # 如果已经是绝对路径，仍然确保它在基础目录内（安全检查）
+            full_path = decoded_folder_path
+            # 标准化路径
+            full_path = os.path.normpath(full_path)
+            
+        # 安全检查：验证路径是否在基础目录内
+        if not full_path.startswith(base_workshop_folder):
+            logger.warning(f'路径遍历尝试被拒绝: {folder_path}')
+            return JSONResponse(content={"success": False, "error": "访问被拒绝: 路径不在允许的范围内"}, status_code=403)
+        
+        folder_path = full_path
+        logger.info(f'处理后的完整路径: {folder_path}')
         
         # 解析本地ID
         if item_id.startswith('local_'):
@@ -3754,7 +3850,31 @@ async def check_file_exists(path: str = None):
         if not path:
             return JSONResponse(content={"exists": False}, status_code=400)
         
-        exists = os.path.exists(path) and os.path.isfile(path)
+        # 获取基础目录和允许访问的目录列表
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        allowed_dirs = [
+            os.path.realpath(os.path.join(base_dir, 'static')),
+            os.path.realpath(os.path.join(base_dir, 'assets'))
+        ]
+        
+        # 解码URL编码的路径
+        decoded_path = unquote(path)
+        
+        # Windows路径处理
+        if os.name == 'nt':
+            decoded_path = decoded_path.replace('/', '\\')
+        
+        # 规范化路径以防止路径遍历攻击
+        real_path = os.path.realpath(decoded_path)
+        
+        # 检查路径是否在允许的目录内
+        if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+            # 检查文件是否存在
+            exists = os.path.exists(real_path) and os.path.isfile(real_path)
+        else:
+            # 不在允许的目录内，返回文件不存在
+            exists = False
+        
         return JSONResponse(content={"exists": exists})
         
     except Exception as e:
@@ -3763,10 +3883,69 @@ async def check_file_exists(path: str = None):
 
 @app.get('/api/find-first-image')
 async def find_first_image(folder: str = None):
+    """
+    查找指定文件夹中的预览图片 - 增强版，添加了严格的安全检查
+    
+    安全注意事项：
+    1. 只允许访问项目内特定的安全目录
+    2. 防止路径遍历攻击
+    3. 限制返回信息，避免泄露文件系统信息
+    4. 记录可疑访问尝试
+    5. 此端点在非开发模式下被完全禁用
+    """
+    # 开发模式检查 - 在非开发模式下完全禁用此端点
+    if not DEVELOPMENT_MODE:
+        logger.warning("预览图片查找端点在生产环境中已禁用")
+        return JSONResponse(content={"error": "此功能仅在开发模式下可用"}, status_code=403)
+    
     try:
-        # folder 已经通过函数参数获取
+        # 检查参数有效性
+        if not folder:
+            logger.warning("收到空的文件夹路径请求")
+            return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=400)
         
-        if not folder or not os.path.exists(folder) or not os.path.isdir(folder):
+        # 安全警告日志记录
+        logger.warning(f"预览图片查找请求: {folder}")
+        
+        # 获取基础目录和允许访问的目录列表
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        allowed_dirs = [
+            os.path.realpath(os.path.join(base_dir, 'static')),
+            os.path.realpath(os.path.join(base_dir, 'assets'))
+        ]
+        
+        # 解码URL编码的路径
+        decoded_folder = unquote(folder)
+        
+        # Windows路径处理
+        if os.name == 'nt':
+            decoded_folder = decoded_folder.replace('/', '\\')
+        
+        # 额外的安全检查：拒绝包含路径遍历字符的请求
+        if '..' in decoded_folder or '//' in decoded_folder:
+            logger.warning(f"检测到潜在的路径遍历攻击: {decoded_folder}")
+            return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=403)
+        
+        # 规范化路径以防止路径遍历攻击
+        try:
+            real_folder = os.path.realpath(decoded_folder)
+        except Exception as e:
+            logger.error(f"路径规范化失败: {e}")
+            return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=400)
+        
+        # 检查路径是否在允许的目录内
+        is_allowed = False
+        for allowed_dir in allowed_dirs:
+            if real_folder.startswith(allowed_dir):
+                is_allowed = True
+                break
+        
+        if not is_allowed:
+            logger.warning(f"访问被拒绝：路径不在允许的目录内 - {real_folder}")
+            return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=403)
+        
+        # 检查文件夹是否存在
+        if not os.path.exists(real_folder) or not os.path.isdir(real_folder):
             return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=400)
         
         # 只查找指定的8个预览图片名称，按优先级顺序
@@ -3778,15 +3957,31 @@ async def find_first_image(folder: str = None):
         ]
         
         for image_name in preview_image_names:
-            image_path = os.path.join(folder, image_name)
-            if os.path.exists(image_path) and os.path.isfile(image_path):
-                return JSONResponse(content={"success": True, "imagePath": image_path})
+            image_path = os.path.join(real_folder, image_name)
+            try:
+                # 检查文件是否存在
+                if os.path.exists(image_path) and os.path.isfile(image_path):
+                    # 再次验证图片文件路径是否在允许的目录内
+                    real_image_path = os.path.realpath(image_path)
+                    if any(real_image_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+                        # 只返回相对路径或文件名，不返回完整的文件系统路径，避免信息泄露
+                        # 计算相对于base_dir的相对路径
+                        try:
+                            relative_path = os.path.relpath(real_image_path, base_dir)
+                            return JSONResponse(content={"success": True, "imagePath": relative_path})
+                        except ValueError:
+                            # 如果无法计算相对路径（例如跨驱动器），只返回文件名
+                            return JSONResponse(content={"success": True, "imagePath": image_name})
+            except Exception as e:
+                logger.error(f"检查图片文件 {image_name} 失败: {e}")
+                continue
         
         return JSONResponse(content={"success": False, "error": "未找到指定的预览图片文件"})
         
     except Exception as e:
         logger.error(f"查找预览图片文件失败: {e}")
-        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+        # 发生异常时不泄露详细信息
+        return JSONResponse(content={"success": False, "error": "服务器内部错误"}, status_code=500)
 
 # 辅助函数
 def get_folder_size(folder_path):

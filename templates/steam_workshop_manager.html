@@ -805,6 +805,7 @@
         
         // 本地物品区域切换功能
         // 检查文件是否存在
+            /* 注释掉重复函数定义 - 保留第二个版本（第1061行开始）
             async function doesFileExist(filePath) {
                 try {
                     const response = await fetch(`/api/file-exists?path=${encodeURIComponent(filePath)}`);
@@ -900,6 +901,19 @@
                 }
                 return [];
             }
+            
+            // 格式化日期时间（完整版本）
+            function formatDate(date) {
+                if (!date) return '未知';
+                return new Date(date).toLocaleString('zh-CN', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+            */
             
             function toggleLocalItemsSection() {
             const localItemsSection = document.getElementById('local-items');
@@ -1201,9 +1215,9 @@
                             
                             ${!isPublished ? `
                                 <div class="card-actions">
-                                <button class="button" onclick="prepareItemForUpload('${item.id}', '${encodeURIComponent(item.path.replace(/\\/g, '/'))}')">准备上传</button>
-                                <button class="button button-primary" onclick="quickUploadItem(event, '${item.id}', '${encodeURIComponent(item.path.replace(/\\/g, '/'))}')">快速上传</button>
-                            </div>
+                                    <button class="button" onclick="prepareItemForUpload('${item.id}', '${encodeURIComponent(item.path.replace(/\\\\/g, '/'))}')">准备上传</button>
+                                    <button class="button button-primary" onclick="quickUploadItem(event, '${item.id}', '${encodeURIComponent(item.path.replace(/\\\\/g, '/'))}')">快速上传</button>
+                                </div>
                             ` : `
                                 <div class="card-actions">
                                     <button class="button button-disabled" disabled>已发布</button>
@@ -1351,11 +1365,23 @@
         }
         
         // 格式化日期
+        /* 注释掉不完整的formatDate版本 */
+        /*
         function formatDate(timestamp) {
             if (!timestamp) return '未知';
             
             const date = new Date(timestamp);
             return date.toLocaleDateString();
+        }
+        */
+        
+        // 添加完整版本的formatDate函数（包含日期和时间）
+        function formatDate(timestamp) {
+            if (!timestamp) return '未知';
+            
+            const date = new Date(timestamp);
+            // 使用toLocaleString同时显示日期和时间
+            return date.toLocaleString();
         }
         
         // 文件路径选择辅助功能
@@ -2234,11 +2260,22 @@ function viewItemDetails(itemId) {
                 })
                 .then(data => {
                     if (data.success) {
-                        showMessage(`已成功取消订阅 "${itemName}"`, 'success');
-                        // 重新加载订阅列表
+                        // 显示异步操作状态
+                        let statusMessage = `取消订阅请求已被接受，正在处理 "${itemName}"`;
+                        if (data.status === 'accepted') {
+                            statusMessage = `取消订阅请求已被接受，系统正在处理 "${itemName}"`;
+                        }
+                        showMessage(statusMessage, 'success');
+                        
+                        // 立即重新加载订阅列表
                         loadSubscriptions();
-                        // 如果模态框是打开的，关闭它
-                        closeModal();
+                        
+                        // 添加短暂延迟后再次刷新，确保获取最新状态
+                        setTimeout(() => {
+                            loadSubscriptions();
+                            showMessage(`订阅列表已更新`, 'success');
+                        }, 1000);
+                        
                     } else {
                         showMessage(`取消订阅失败: ${data.error || '未知错误'}`, 'error');
                         // 如果有消息提示，显示给用户
@@ -2262,6 +2299,9 @@ function viewItemDetails(itemId) {
             
             // 页面加载时自动加载订阅内容
             loadSubscriptions();
+            
+            // 页面加载时自动扫描本地物品
+            scanLocalItems();
         };
     </script>
 </body>
