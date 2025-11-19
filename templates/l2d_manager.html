@@ -569,8 +569,8 @@
                     }
                 }
 
-                updateSelectWithOptions(motionSelect, currentModelFiles.motion_files, window.t ? window.t('live2d.selectMotion') : '选择动作');
-                updateSelectWithOptions(expressionSelect, currentModelFiles.expression_files, window.t ? window.t('live2d.selectExpression') : '选择表情');
+                updateSelectWithOptions(motionSelect, currentModelFiles.motion_files, window.t ? window.t('live2d.selectMotion') : '选择动作', 'motion');
+                updateSelectWithOptions(expressionSelect, currentModelFiles.expression_files, window.t ? window.t('live2d.selectExpression') : '选择表情', 'expression');
 
                 // 7. Load current emotion mapping for this model
                 await loadEmotionMappingForModel(modelName);
@@ -678,7 +678,7 @@
                 } catch (e) {
                     console.error('翻译函数调用失败:', e);
                     message = '您有未保存的设置，确定要离开吗？';
-                    title = window.t ? window.t('dialogs.confirmLeave') : '确认离开';
+                    title = '确认离开';
                 }
                 
                 const confirmLeave = await showConfirm(message, title, { danger: true });
@@ -802,21 +802,16 @@
             savePersistentBtn.disabled = disabled;
         }
 
-        function updateSelectWithOptions(select, options, defaultText) {
+        function updateSelectWithOptions(select, options, defaultText, type) {
             select.innerHTML = `<option value="">${defaultText}</option>`;
             options.forEach(opt => {
                 const option = document.createElement('option');
                 option.value = opt;
-                // 为表情文件提供更友好的显示名称
-                // 检查是否是表情或动作（支持中英文）
-                const isExpression = defaultText.includes('表情') || defaultText.includes('Expression') || defaultText.includes('expression');
-                const isMotion = defaultText.includes('动作') || defaultText.includes('Motion') || defaultText.includes('motion');
                 
-                if (isExpression) {
+                if (type === 'expression') {
                     const displayName = opt.split('/').pop().replace('.exp3.json', '');
                     option.textContent = displayName;
-                } else if (isMotion) {
-                    // 为动作文件提供更友好的显示名称（去掉路径和扩展名）
+                } else if (type === 'motion') {
                     const displayName = opt.split('/').pop().replace('.motion3.json', '');
                     option.textContent = displayName;
                 } else {
@@ -898,7 +893,7 @@
             persistentBox.style.display = '';
             // 可选：所有表达式 - 已选（常驻）
             const unused = (currentModelFiles.expression_files || []).filter(f => !currentPersistent.includes(f));
-            updateSelectWithOptions(persistentSelect, unused, window.t ? window.t('live2d.selectPersistentExpression') : '选择常驻表情');
+            updateSelectWithOptions(persistentSelect, unused, window.t ? window.t('live2d.selectPersistentExpression') : '选择常驻表情', 'expression');
 
             // 列表
             if (!currentPersistent.length) {
