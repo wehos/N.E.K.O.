@@ -464,7 +464,7 @@
     "switchingCatgirl": "Switching to {name}...",
     "switchedCatgirl": "Switched to {name}",
     "switchCatgirlFailed": "Failed to switch to {name}",
-    "started": "{name} started",
+    "started": "started",
     "voiceUpdated": "{name}'s voice has been updated",
     "audioWorkletFailed": "AudioWorklet loading failed",
     "sessionTimeout": "Session start timeout",

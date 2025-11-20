@@ -463,7 +463,7 @@
     "switchingCatgirl": "正在切换到 {name}...",
     "switchedCatgirl": "已切换到 {name}",
     "switchCatgirlFailed": "切换到 {name} 失败",
-    "started": "{name}已启动",
+    "started": "已启动",
     "voiceUpdated": "{name}的语音已更新",
     "audioWorkletFailed": "AudioWorklet加载失败",
     "sessionTimeout": "Session启动超时",
