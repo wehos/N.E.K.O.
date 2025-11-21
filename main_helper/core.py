@@ -5,7 +5,6 @@ TTS部分使用了两个队列，原本只需要一个，但是阿里的TTS API�
 """
 import asyncio
 import json
-import traceback
 import struct  # For packing audio data
 import threading
 import re
@@ -52,6 +51,7 @@ class LLMSessionManager:
         self.tts_response_queue = MPQueue() # TTS response (多进程队列)
         self.tts_process = None  # TTS子进程
         self.lock = asyncio.Lock()  # 使用异步锁替代同步锁
+        self.websocket_lock = None  # websocket操作的共享锁，由main_server设置
         self.current_speech_id = None
         self.inflect_parser = inflect.engine()
         self.emoji_pattern = re.compile(r'[^\w\u4e00-\u9fff\s>][^\w\u4e00-\u9fff\s]{2,}[^\w\u4e00-\u9fff\s<]', flags=re.UNICODE)
@@ -457,7 +457,6 @@ class LLMSessionManager:
                         await self._process_stream_data_internal(message)
                     except Exception as e:
                         logger.error(f"💥 发送缓存的输入数据失败: {e}")
-                        traceback.print_exc()
                         break
             
             # 清空缓存
@@ -671,7 +670,8 @@ class LLMSessionManager:
                     on_output_transcript=self.handle_output_transcript,
                     on_connection_error=self.handle_connection_error,
                     on_response_done=self.handle_response_complete,
-                    on_silence_timeout=self.handle_silence_timeout
+                    on_silence_timeout=self.handle_silence_timeout,
+                    api_type=self.core_api_type  # 传入API类型，用于判断是否启用静默超时
                 )
 
             # 连接 session
@@ -722,6 +722,39 @@ class LLMSessionManager:
                 # 启动消息处理任务
                 self.message_handler_task = asyncio.create_task(self.session.handle_messages())
                 
+                # 🔥 预热逻辑：对于语音模式，立即触发一次 skipped response 来 prefill instructions
+                # 这样可以大幅减少首轮对话的延迟（让 API 提前处理并缓存 instructions 的 KV cache）
+                if isinstance(self.session, OmniRealtimeClient):
+                    try:
+                        logger.info(f"🔥 开始预热 Session，prefill instructions...")
+                        warmup_start = time.time()
+                        
+                        # 创建一个事件来等待预热完成
+                        warmup_done_event = asyncio.Event()
+                        original_callback = self.session.on_response_done
+                        
+                        # 临时替换回调，只用于等待预热完成
+                        async def warmup_callback():
+                            warmup_done_event.set()
+                        
+                        self.session.on_response_done = warmup_callback
+                        
+                        await self.session.create_response("", skipped=True)
+                        
+                        # 等待预热完成（最多5秒）
+                        try:
+                            await asyncio.wait_for(warmup_done_event.wait(), timeout=5.0)
+                            warmup_time = time.time() - warmup_start
+                            logger.info(f"✅ Session预热完成 (耗时: {warmup_time:.2f}秒)，首轮对话延迟已优化")
+                        except asyncio.TimeoutError:
+                            logger.warning(f"⚠️ Session预热超时（5秒），继续执行...")
+                        
+                        # 恢复原始回调
+                        self.session.on_response_done = original_callback
+                        
+                    except Exception as e:
+                        logger.warning(f"⚠️ Session预热失败（不影响正常使用）: {e}")
+                
                 # 启动成功，重置失败计数器
                 self.session_start_failure_count = 0
                 self.session_start_last_failure_time = None
@@ -745,7 +778,6 @@ class LLMSessionManager:
             
             error_message = f"Error starting session: {e}"
             logger.error(f"💥 {error_message} (失败次数: {self.session_start_failure_count})")
-            traceback.print_exc()
             
             # 如果达到最大失败次数，发送严重警告并通知前端
             if self.session_start_failure_count >= self.session_start_max_failures:
@@ -827,7 +859,8 @@ class LLMSessionManager:
                 on_input_transcript=self.handle_input_transcript,
                 on_output_transcript=self.handle_output_transcript,
                 on_connection_error=self.handle_connection_error,
-                on_response_done=self.handle_response_complete
+                on_response_done=self.handle_response_complete,
+                api_type=self.core_api_type  # 传入API类型，用于判断是否启用静默超时
             )
             
             initial_prompt = (f"你是一个角色扮演大师，并且精通电脑操作。请按要求扮演以下角色（{self.lanlan_name}），在对方请求时、回答“我试试”并尝试操纵电脑。" if self._is_agent_enabled() else f"你是一个角色扮演大师。请按要求扮演以下角色（{self.lanlan_name}）。") + self.lanlan_prompt
@@ -849,7 +882,6 @@ class LLMSessionManager:
             # Do not set warmed_up_event here if cancelled.
         except Exception as e:
             logger.error(f"💥 BG Prep Stage 1: Error: {e}")
-            traceback.print_exc()
             await self._cleanup_pending_session_resources()
             # Do not set warmed_up_event on error.
         finally:
@@ -985,7 +1017,6 @@ class LLMSessionManager:
 
         except Exception as e:
             logger.error(f"💥 Final Swap Sequence: Error: {e}")
-            traceback.print_exc()
             await self.send_status(f"内部更新切换失败: {e}.")
             await self._cleanup_pending_session_resources()
             self._reset_preparation_state(clear_main_cache=False)
@@ -996,26 +1027,6 @@ class LLMSessionManager:
             if self.final_swap_task and self.final_swap_task.done():
                 self.final_swap_task = None
             logger.info("Final Swap Sequence: Routine finished.")
-
-    async def system_timer(self):  #定期向Lanlan发送心跳，允许Lanlan主动向用户搭话。
-        '''这个模块在开源版中没有实际用途，因为开源版不支持主动搭话。原因是在实际测试中，搭话效果不佳。'''
-        while True:
-            if self.session and self.active_session_is_idle:
-                if self.last_time != str(datetime.now().strftime("%Y-%m-%d %H:%M")):
-                    self.last_time = str(datetime.now().strftime("%Y-%m-%d %H:%M"))
-                    try:
-                        await self.session.create_response("SYSTEM_MESSAGE | 当前时间：" + self.last_time + "。")
-                    except web_exceptions.ConnectionClosedOK:
-                        break
-                    except web_exceptions.ConnectionClosedError as e:
-                        logger.error(f"💥 System timer: Error sending data to session: {e}")
-                        await self.disconnected_by_server()
-                    except Exception as e:
-                        error_message = f"System timer: Error sending data to session: {e}"
-                        logger.error(f"💥 {error_message}")
-                        traceback.print_exc()
-                        await self.send_status(error_message)
-            await asyncio.sleep(5)
 
     async def disconnected_by_server(self):
         await self.send_status(f"{self.lanlan_name}失联了，即将重启！")
@@ -1167,7 +1178,6 @@ class LLMSessionManager:
                     return
                 except Exception as e:
                     logger.error(f"💥 Stream: Error processing audio data: {e}")
-                    traceback.print_exc()
                     return
 
             elif input_type in ['screen', 'camera']:
@@ -1222,7 +1232,6 @@ class LLMSessionManager:
         except Exception as e:
             error_message = f"Stream: Error sending data to session: {e}"
             logger.error(f"💥 {error_message}")
-            traceback.print_exc()
             await self.send_status(error_message)
 
     async def end_session(self, by_server=False):  # 与Core API断开连接
@@ -1311,7 +1320,13 @@ class LLMSessionManager:
     async def cleanup(self):
         await self.end_session(by_server=True)
         # 清理websocket引用，防止保留失效的连接
-        self.websocket = None
+        # 使用共享锁保护websocket操作，防止与initialize_character_data()中的restore竞争
+        if self.websocket_lock:
+            async with self.websocket_lock:
+                self.websocket = None
+        else:
+            # 如果没有设置websocket_lock（旧代码路径），直接清理
+            self.websocket = None
 
     async def send_status(self, message: str): # 向前端发送status message
         try:

@@ -25,7 +25,7 @@ app = FastAPI(title="Lanlan Tool Server", version="0.1.0")
 
 # Configure logging
 from utils.logger_config import setup_logging
-logger, log_config = setup_logging(app_name="Xiao8_Agent", log_level=logging.INFO)
+logger, log_config = setup_logging(service_name="Agent", log_level=logging.INFO)
 
 
 class Modules:

@@ -124,8 +124,6 @@ class McpRouterClient:
             return None
         except Exception as e:
             logger.error(f"[MCP] Request failed for {method}: {e}")
-            import traceback
-            traceback.print_exc()
             return None
     
     async def initialize(self) -> bool:

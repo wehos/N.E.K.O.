@@ -667,7 +667,7 @@ def cosyvoice_vc_tts_worker(request_queue, response_queue, audio_api_key, voice_
                 synthesizer = None
                 current_speech_id = None
                 continue
-                
+                    
         if tts_text is None or not tts_text.strip():
             time.sleep(0.01)
             continue

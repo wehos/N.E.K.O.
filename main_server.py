@@ -5,7 +5,6 @@ import mimetypes
 mimetypes.add_type("application/javascript", ".js")
 import asyncio
 import json
-import traceback
 import uuid
 import logging
 from datetime import datetime
@@ -45,7 +44,7 @@ templates = Jinja2Templates(directory=template_dir)
 # Configure logging
 from utils.logger_config import setup_logging
 
-logger, log_config = setup_logging(app_name="Xiao8_Main", log_level=logging.INFO)
+logger, log_config = setup_logging(service_name="Main", log_level=logging.INFO)
 
 _config_manager = get_config_manager()
 
@@ -63,6 +62,8 @@ sync_shutdown_event = {}
 session_manager = {}
 session_id = {}
 sync_process = {}
+# 每个角色的websocket操作锁，用于防止preserve/restore与cleanup()之间的竞争
+websocket_locks = {}
 # Global variables for character data (will be updated on reload)
 master_name = None
 her_name = None
@@ -76,11 +77,11 @@ setting_store = None
 recent_log = None
 catgirl_names = []
 
-def initialize_character_data():
+async def initialize_character_data():
     """初始化或重新加载角色配置数据"""
     global master_name, her_name, master_basic_config, lanlan_basic_config
     global name_mapping, lanlan_prompt, semantic_store, time_store, setting_store, recent_log
-    global catgirl_names, sync_message_queue, sync_shutdown_event, session_manager, session_id, sync_process
+    global catgirl_names, sync_message_queue, sync_shutdown_event, session_manager, session_id, sync_process, websocket_locks
     
     logger.info("正在加载角色配置...")
     
@@ -100,12 +101,32 @@ def initialize_character_data():
             sync_process[k] = None
             logger.info(f"为角色 {k} 初始化新资源")
         
+        # 确保该角色有websocket锁
+        if k not in websocket_locks:
+            websocket_locks[k] = asyncio.Lock()
+        
         # 更新或创建session manager（使用最新的prompt）
-        session_manager[k] = core.LLMSessionManager(
-            sync_message_queue[k],
-            k,
-            lanlan_prompt[k].replace('{LANLAN_NAME}', k).replace('{MASTER_NAME}', master_name)
-        )
+        # 使用锁保护websocket的preserve/restore操作，防止与cleanup()竞争
+        async with websocket_locks[k]:
+            # 如果已存在且已有websocket连接，保留websocket引用
+            old_websocket = None
+            if k in session_manager and session_manager[k].websocket:
+                old_websocket = session_manager[k].websocket
+                logger.info(f"保留 {k} 的现有WebSocket连接")
+            
+            session_manager[k] = core.LLMSessionManager(
+                sync_message_queue[k],
+                k,
+                lanlan_prompt[k].replace('{LANLAN_NAME}', k).replace('{MASTER_NAME}', master_name)
+            )
+            
+            # 将websocket锁存储到session manager中，供cleanup()使用
+            session_manager[k].websocket_lock = websocket_locks[k]
+            
+            # 恢复websocket引用（如果存在）
+            if old_websocket:
+                session_manager[k].websocket = old_websocket
+                logger.info(f"已恢复 {k} 的WebSocket连接")
     
     # 清理已删除角色的资源
     removed_names = [k for k in session_manager.keys() if k not in catgirl_names]
@@ -134,8 +155,13 @@ def initialize_character_data():
     
     logger.info(f"角色配置加载完成，当前角色: {catgirl_names}，主人: {master_name}")
 
-# 初始化角色数据
-initialize_character_data()
+# 初始化角色数据（使用asyncio.run在模块级别执行async函数）
+import asyncio as _init_asyncio
+try:
+    _init_asyncio.get_event_loop()
+except RuntimeError:
+    _init_asyncio.set_event_loop(_init_asyncio.new_event_loop())
+_init_asyncio.get_event_loop().run_until_complete(initialize_character_data())
 lock = asyncio.Lock()
 
 # --- FastAPI App Setup ---
@@ -182,37 +208,10 @@ def set_start_config(config):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_default_index(request: Request):
-    # 每次动态获取角色数据
-    _, her_name, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
-    # 获取live2d字段
-    live2d = lanlan_basic_config.get(her_name, {}).get('live2d', 'mao_pro')
-    # 查找所有模型
-    models = find_models()
-    # 根据live2d字段查找对应的model path
-    model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
     return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": her_name,
-        "model_path": model_path,
-        "focus_mode": False
+        "request": request
     })
 
-@app.get("/focus", response_class=HTMLResponse)
-async def get_default_focus_index(request: Request):
-    # 每次动态获取角色数据
-    _, her_name, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
-    # 获取live2d字段
-    live2d = lanlan_basic_config.get(her_name, {}).get('live2d', 'mao_pro')
-    # 查找所有模型
-    models = find_models()
-    # 根据live2d字段查找对应的model path
-    model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
-    return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": her_name,
-        "model_path": model_path,
-        "focus_mode": True
-    })
 
 @app.get("/api/preferences")
 async def get_preferences():
@@ -289,6 +288,39 @@ async def set_preferred_model(request: Request):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/config/page_config")
+async def get_page_config(lanlan_name: str = ""):
+    """获取页面配置（lanlan_name 和 model_path）"""
+    try:
+        # 获取角色数据
+        _, her_name, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
+        
+        # 如果提供了 lanlan_name 参数，使用它；否则使用当前角色
+        target_name = lanlan_name if lanlan_name else her_name
+        
+        # 获取 live2d 字段
+        live2d = lanlan_basic_config.get(target_name, {}).get('live2d', 'mao_pro')
+        
+        # 查找所有模型
+        models = find_models()
+        
+        # 根据 live2d 字段查找对应的 model path
+        model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
+        
+        return {
+            "success": True,
+            "lanlan_name": target_name,
+            "model_path": model_path
+        }
+    except Exception as e:
+        logger.error(f"获取页面配置失败: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "lanlan_name": "",
+            "model_path": ""
+        }
+
 @app.get("/api/config/core_api")
 async def get_core_config_api():
     """获取核心配置（API Key）"""
@@ -316,12 +348,41 @@ async def get_core_config_api():
             "assistApiKeyStep": core_cfg.get('assistApiKeyStep', ''),
             "assistApiKeySilicon": core_cfg.get('assistApiKeySilicon', ''),
             "mcpToken": core_cfg.get('mcpToken', ''),  # 添加mcpToken字段
+            "enableCustomApi": core_cfg.get('enableCustomApi', False),  # 添加enableCustomApi字段
             "success": True
         }
     except Exception as e:
         return {
             "success": False,
             "error": str(e)
+        }
+
+
+@app.get("/api/config/api_providers")
+async def get_api_providers_config():
+    """获取API服务商配置（供前端使用）"""
+    try:
+        from utils.api_config_loader import (
+            get_core_api_providers_for_frontend,
+            get_assist_api_providers_for_frontend,
+        )
+        
+        # 使用缓存加载配置（性能更好，配置更新后需要重启服务）
+        core_providers = get_core_api_providers_for_frontend()
+        assist_providers = get_assist_api_providers_for_frontend()
+        
+        return {
+            "success": True,
+            "core_api_providers": core_providers,
+            "assist_api_providers": assist_providers,
+        }
+    except Exception as e:
+        logger.error(f"获取API服务商配置失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "core_api_providers": [],
+            "assist_api_providers": [],
         }
 
 
@@ -333,24 +394,29 @@ async def update_core_config(request: Request):
         if not data:
             return {"success": False, "error": "无效的数据"}
         
-        # 检查是否为免费版配置
-        is_free_version = data.get('coreApi') == 'free' or data.get('assistApi') == 'free'
+        # 检查是否启用了自定义API
+        enable_custom_api = data.get('enableCustomApi', False)
         
-        if 'coreApiKey' not in data:
-            return {"success": False, "error": "缺少coreApiKey字段"}
-        
-        api_key = data['coreApiKey']
-        if api_key is None:
-            return {"success": False, "error": "API Key不能为null"}
-        
-        if not isinstance(api_key, str):
-            return {"success": False, "error": "API Key必须是字符串类型"}
-        
-        api_key = api_key.strip()
-        
-        # 免费版允许使用 'free-access' 作为API key，不进行空值检查
-        if not is_free_version and not api_key:
-            return {"success": False, "error": "API Key不能为空"}
+        # 如果启用了自定义API，不需要强制检查核心API key
+        if not enable_custom_api:
+            # 检查是否为免费版配置
+            is_free_version = data.get('coreApi') == 'free' or data.get('assistApi') == 'free'
+            
+            if 'coreApiKey' not in data:
+                return {"success": False, "error": "缺少coreApiKey字段"}
+            
+            api_key = data['coreApiKey']
+            if api_key is None:
+                return {"success": False, "error": "API Key不能为null"}
+            
+            if not isinstance(api_key, str):
+                return {"success": False, "error": "API Key必须是字符串类型"}
+            
+            api_key = api_key.strip()
+            
+            # 免费版允许使用 'free-access' 作为API key，不进行空值检查
+            if not is_free_version and not api_key:
+                return {"success": False, "error": "API Key不能为空"}
         
         # 保存到core_config.json
         from pathlib import Path
@@ -360,7 +426,21 @@ async def update_core_config(request: Request):
         # 确保配置目录存在
         Path(core_config_path).parent.mkdir(parents=True, exist_ok=True)
         
-        core_cfg = {"coreApiKey": api_key}
+        # 构建配置对象
+        core_cfg = {}
+        
+        # 只有在启用自定义API时，才允许不设置coreApiKey
+        if enable_custom_api:
+            # 启用自定义API时，coreApiKey是可选的
+            if 'coreApiKey' in data:
+                api_key = data['coreApiKey']
+                if api_key is not None and isinstance(api_key, str):
+                    core_cfg['coreApiKey'] = api_key.strip()
+        else:
+            # 未启用自定义API时，必须设置coreApiKey
+            api_key = data.get('coreApiKey', '')
+            if api_key is not None and isinstance(api_key, str):
+                core_cfg['coreApiKey'] = api_key.strip()
         if 'coreApi' in data:
             core_cfg['coreApi'] = data['coreApi']
         if 'assistApi' in data:
@@ -377,10 +457,91 @@ async def update_core_config(request: Request):
             core_cfg['assistApiKeySilicon'] = data['assistApiKeySilicon']
         if 'mcpToken' in data:
             core_cfg['mcpToken'] = data['mcpToken']
+        if 'enableCustomApi' in data:
+            core_cfg['enableCustomApi'] = data['enableCustomApi']
+        
+        # 添加用户自定义API配置
+        if 'summaryModelProvider' in data:
+            core_cfg['summaryModelProvider'] = data['summaryModelProvider']
+        if 'summaryModelUrl' in data:
+            core_cfg['summaryModelUrl'] = data['summaryModelUrl']
+        if 'summaryModelApiKey' in data:
+            core_cfg['summaryModelApiKey'] = data['summaryModelApiKey']
+        if 'correctionModelProvider' in data:
+            core_cfg['correctionModelProvider'] = data['correctionModelProvider']
+        if 'correctionModelUrl' in data:
+            core_cfg['correctionModelUrl'] = data['correctionModelUrl']
+        if 'correctionModelApiKey' in data:
+            core_cfg['correctionModelApiKey'] = data['correctionModelApiKey']
+        if 'emotionModelProvider' in data:
+            core_cfg['emotionModelProvider'] = data['emotionModelProvider']
+        if 'emotionModelUrl' in data:
+            core_cfg['emotionModelUrl'] = data['emotionModelUrl']
+        if 'emotionModelApiKey' in data:
+            core_cfg['emotionModelApiKey'] = data['emotionModelApiKey']
+        if 'visionModelProvider' in data:
+            core_cfg['visionModelProvider'] = data['visionModelProvider']
+        if 'visionModelUrl' in data:
+            core_cfg['visionModelUrl'] = data['visionModelUrl']
+        if 'visionModelApiKey' in data:
+            core_cfg['visionModelApiKey'] = data['visionModelApiKey']
+        if 'omniModelProvider' in data:
+            core_cfg['omniModelProvider'] = data['omniModelProvider']
+        if 'omniModelUrl' in data:
+            core_cfg['omniModelUrl'] = data['omniModelUrl']
+        if 'omniModelApiKey' in data:
+            core_cfg['omniModelApiKey'] = data['omniModelApiKey']
+        if 'ttsModelProvider' in data:
+            core_cfg['ttsModelProvider'] = data['ttsModelProvider']
+        if 'ttsModelUrl' in data:
+            core_cfg['ttsModelUrl'] = data['ttsModelUrl']
+        if 'ttsModelApiKey' in data:
+            core_cfg['ttsModelApiKey'] = data['ttsModelApiKey']
+        
         with open(core_config_path, 'w', encoding='utf-8') as f:
             json.dump(core_cfg, f, indent=2, ensure_ascii=False)
         
-        return {"success": True, "message": "API Key已保存"}
+        # API配置更新后，需要先通知所有客户端，再关闭session，最后重新加载配置
+        logger.info("API配置已更新，准备通知客户端并重置所有session...")
+        
+        # 1. 先通知所有连接的客户端即将刷新（WebSocket还连着）
+        notification_count = 0
+        for lanlan_name, mgr in session_manager.items():
+            if mgr.is_active and mgr.websocket:
+                try:
+                    await mgr.websocket.send_text(json.dumps({
+                        "type": "reload_page",
+                        "message": "API配置已更新，页面即将刷新"
+                    }))
+                    notification_count += 1
+                    logger.info(f"已通知 {lanlan_name} 的前端刷新页面")
+                except Exception as e:
+                    logger.warning(f"通知 {lanlan_name} 的WebSocket失败: {e}")
+        
+        logger.info(f"已通知 {notification_count} 个客户端")
+        
+        # 2. 立刻关闭所有活跃的session（这会断开所有WebSocket）
+        sessions_ended = []
+        for lanlan_name, mgr in session_manager.items():
+            if mgr.is_active:
+                try:
+                    await mgr.end_session(by_server=True)
+                    sessions_ended.append(lanlan_name)
+                    logger.info(f"{lanlan_name} 的session已结束")
+                except Exception as e:
+                    logger.error(f"结束 {lanlan_name} 的session时出错: {e}")
+        
+        # 3. 重新加载配置并重建session manager
+        logger.info("正在重新加载配置...")
+        try:
+            await initialize_character_data()
+            logger.info("配置重新加载完成，新的API配置已生效")
+        except Exception as reload_error:
+            logger.error(f"重新加载配置失败: {reload_error}")
+            return {"success": False, "error": f"配置已保存但重新加载失败: {str(reload_error)}"}
+        
+        logger.info(f"已通知 {notification_count} 个连接的客户端API配置已更新")
+        return {"success": True, "message": "API Key已保存并重新加载配置", "sessions_ended": len(sessions_ended)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -460,7 +621,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
     logger.info(f"⭐websocketWebSocket accepted: {websocket.client}, new session id: {session_id[lanlan_name]}, lanlan_name: {lanlan_name}")
     
     # 立即设置websocket到session manager，以支持主动搭话
-    session_manager[lanlan_name].websocket = websocket
+    # 注意：这里设置后，即使cleanup()被调用，websocket也会在start_session时重新设置
+    if lanlan_name in session_manager:
+        session_manager[lanlan_name].websocket = websocket
+        logger.info(f"✅ 已设置 {lanlan_name} 的WebSocket连接")
+    else:
+        logger.error(f"❌ 错误：{lanlan_name} 不在session_manager中！当前session_manager: {list(session_manager.keys())}")
 
     try:
         while True:
@@ -508,7 +674,6 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
     except Exception as e:
         error_message = f"WebSocket handler error: {e}"
         logger.error(f"💥 {error_message}")
-        logger.error(traceback.format_exc())
         try:
             await session_manager[lanlan_name].send_status(f"Server error: {e}")
         except:
@@ -516,7 +681,8 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
     finally:
         logger.info(f"Cleaning up WebSocket resources: {websocket.client}")
         await session_manager[lanlan_name].cleanup()
-        # cleanup() 已经会清理 websocket，但为了确保，再次检查
+        # 注意：cleanup() 会清空 websocket，但只在连接真正断开时调用
+        # 如果连接还在，websocket应该保持设置
         if session_manager[lanlan_name].websocket == websocket:
             session_manager[lanlan_name].websocket = None
 
@@ -722,7 +888,6 @@ async def proactive_chat(request: Request):
             }, status_code=504)
         except Exception as e:
             logger.error(f"[{lanlan_name}] AI处理失败: {e}")
-            logger.error(traceback.format_exc())
             return JSONResponse({
                 "success": False,
                 "error": "AI处理失败",
@@ -731,7 +896,6 @@ async def proactive_chat(request: Request):
         
     except Exception as e:
         logger.error(f"主动搭话接口异常: {e}")
-        logger.error(traceback.format_exc())
         return JSONResponse({
             "success": False,
             "error": "服务器内部错误",
@@ -739,12 +903,10 @@ async def proactive_chat(request: Request):
         }, status_code=500)
 
 @app.get("/l2d", response_class=HTMLResponse)
-async def get_l2d_manager(request: Request, lanlan_name: str = ""):
+async def get_l2d_manager(request: Request):
     """渲染Live2D模型管理器页面"""
-    _, her_name_current, _, _, _, _, _, _, _, _ = _config_manager.get_character_data()
     return templates.TemplateResponse("templates/l2d_manager.html", {
-        "request": request,
-        "lanlan_name": lanlan_name if lanlan_name else her_name_current
+        "request": request
     })
 
 @app.get('/api/characters/current_live2d_model')
@@ -769,20 +931,40 @@ async def get_current_live2d_model(catgirl_name: str = ""):
         # 如果找到了模型名称，获取模型信息
         if live2d_model_name:
             try:
-                # 检查模型是否存在
-                model_dir = os.path.join(os.path.dirname(__file__), 'static', live2d_model_name)
+                # 使用 find_model_directory 查找模型目录（支持 static 和用户文档目录）
+                model_dir, url_prefix = find_model_directory(live2d_model_name)
                 if os.path.exists(model_dir):
                     # 查找模型配置文件
                     model_files = [f for f in os.listdir(model_dir) if f.endswith('.model3.json')]
                     if model_files:
                         model_file = model_files[0]
-                        model_path = f'/static/{live2d_model_name}/{model_file}'
+                        model_path = f'{url_prefix}/{live2d_model_name}/{model_file}'
                         model_info = {
                             'name': live2d_model_name,
                             'path': model_path
                         }
             except Exception as e:
                 logger.warning(f"获取模型信息失败: {e}")
+        
+        # 回退机制：如果没有找到模型，使用默认的mao_pro
+        if not live2d_model_name or not model_info:
+            logger.info(f"猫娘 {catgirl_name} 未设置Live2D模型，回退到默认模型 mao_pro")
+            live2d_model_name = 'mao_pro'
+            try:
+                # 查找mao_pro模型
+                model_dir, url_prefix = find_model_directory('mao_pro')
+                if os.path.exists(model_dir):
+                    model_files = [f for f in os.listdir(model_dir) if f.endswith('.model3.json')]
+                    if model_files:
+                        model_file = model_files[0]
+                        model_path = f'{url_prefix}/mao_pro/{model_file}'
+                        model_info = {
+                            'name': 'mao_pro',
+                            'path': model_path,
+                            'is_fallback': True  # 标记这是回退模型
+                        }
+            except Exception as e:
+                logger.error(f"获取默认模型mao_pro失败: {e}")
         
         return JSONResponse(content={
             'success': True,
@@ -804,8 +986,8 @@ async def chara_manager(request: Request):
     return templates.TemplateResponse('templates/chara_manager.html', {"request": request})
 
 @app.get('/voice_clone', response_class=HTMLResponse)
-async def voice_clone_page(request: Request, lanlan_name: str = ""):
-    return templates.TemplateResponse("templates/voice_clone.html", {"request": request, "lanlan_name": lanlan_name})
+async def voice_clone_page(request: Request):
+    return templates.TemplateResponse("templates/voice_clone.html", {"request": request})
 
 @app.get("/api_key", response_class=HTMLResponse)
 async def api_key_settings(request: Request):
@@ -838,17 +1020,52 @@ async def set_current_catgirl(request: Request):
     if catgirl_name not in characters.get('猫娘', {}):
         return JSONResponse({'success': False, 'error': '指定的猫娘不存在'}, status_code=404)
     
+    old_catgirl = characters.get('当前猫娘', '')
     characters['当前猫娘'] = catgirl_name
     _config_manager.save_characters(characters)
     # 自动重新加载配置
-    initialize_character_data()
+    await initialize_character_data()
+    
+    # 通过WebSocket通知所有连接的客户端
+    # 使用session_manager中的websocket，但需要确保websocket已设置
+    notification_count = 0
+    logger.info(f"开始通知WebSocket客户端：猫娘从 {old_catgirl} 切换到 {catgirl_name}")
+    
+    message = json.dumps({
+        "type": "catgirl_switched",
+        "new_catgirl": catgirl_name,
+        "old_catgirl": old_catgirl
+    })
+    
+    # 遍历所有session_manager，尝试发送消息
+    for lanlan_name, mgr in session_manager.items():
+        ws = mgr.websocket
+        logger.info(f"检查 {lanlan_name} 的WebSocket: websocket存在={ws is not None}")
+        
+        if ws:
+            try:
+                await ws.send_text(message)
+                notification_count += 1
+                logger.info(f"✅ 已通过WebSocket通知 {lanlan_name} 的连接：猫娘已从 {old_catgirl} 切换到 {catgirl_name}")
+            except Exception as e:
+                logger.warning(f"❌ 通知 {lanlan_name} 的连接失败: {e}")
+                # 如果发送失败，可能是连接已断开，清空websocket引用
+                if mgr.websocket == ws:
+                    mgr.websocket = None
+    
+    if notification_count > 0:
+        logger.info(f"✅ 已通过WebSocket通知 {notification_count} 个连接的客户端：猫娘已从 {old_catgirl} 切换到 {catgirl_name}")
+    else:
+        logger.warning(f"⚠️ 没有找到任何活跃的WebSocket连接来通知猫娘切换")
+        logger.warning(f"提示：请确保前端页面已打开并建立了WebSocket连接，且已调用start_session")
+    
     return {"success": True}
 
 @app.post('/api/characters/reload')
 async def reload_character_config():
     """重新加载角色配置（热重载）"""
     try:
-        initialize_character_data()
+        await initialize_character_data()
         return {"success": True, "message": "角色配置已重新加载"}
     except Exception as e:
         logger.error(f"重新加载角色配置失败: {e}")
@@ -866,7 +1083,7 @@ async def update_master(request: Request):
     characters['主人'] = {k: v for k, v in data.items() if v}
     _config_manager.save_characters(characters)
     # 自动重新加载配置
-    initialize_character_data()
+    await initialize_character_data()
     return {"success": True}
 
 @app.post('/api/characters/catgirl')
@@ -886,13 +1103,17 @@ async def add_catgirl(request: Request):
     # 创建猫娘数据，只保存非空字段
     catgirl_data = {}
     for k, v in data.items():
-        if k != '档案名' and v:  # 只保存非空字段
-            catgirl_data[k] = v
+        if k != '档案名':
+            # voice_id 特殊处理：空字符串表示删除该字段
+            if k == 'voice_id' and v == '':
+                continue  # 不添加该字段，相当于删除
+            elif v:  # 只保存非空字段
+                catgirl_data[k] = v
     
     characters['猫娘'][key] = catgirl_data
     _config_manager.save_characters(characters)
     # 自动重新加载配置
-    initialize_character_data()
+    await initialize_character_data()
     return {"success": True}
 
 @app.put('/api/characters/catgirl/{name}')
@@ -904,11 +1125,14 @@ async def update_catgirl(name: str, request: Request):
     if name not in characters.get('猫娘', {}):
         return JSONResponse({'success': False, 'error': '猫娘不存在'}, status_code=404)
     
+    # 记录更新前的voice_id，用于检测是否变更
+    old_voice_id = characters['猫娘'][name].get('voice_id', '')
+    
     # 如果包含voice_id，验证其有效性
     if 'voice_id' in data:
-        from config import validate_voice_id
         voice_id = data['voice_id']
-        if not validate_voice_id(voice_id):
+        # 空字符串表示删除voice_id，跳过验证
+        if voice_id != '' and not _config_manager.validate_voice_id(voice_id):
             voices = _config_manager.get_voices_for_current_api()
             available_voices = list(voices.keys())
             return JSONResponse({
@@ -924,13 +1148,57 @@ async def update_catgirl(name: str, request: Request):
             removed_fields.append(k)
     for k in removed_fields:
         characters['猫娘'][name].pop(k)
+    
+    # 处理voice_id的特殊逻辑：如果传入空字符串，则删除该字段
+    if 'voice_id' in data and data['voice_id'] == '':
+        characters['猫娘'][name].pop('voice_id', None)
+    
+    # 更新其他字段
     for k, v in data.items():
-        if k not in ('档案名') and v:
+        if k not in ('档案名', 'voice_id') and v:
+            characters['猫娘'][name][k] = v
+        elif k == 'voice_id' and v:  # voice_id非空时才更新
             characters['猫娘'][name][k] = v
     _config_manager.save_characters(characters)
+    
+    # 获取更新后的voice_id
+    new_voice_id = characters['猫娘'][name].get('voice_id', '')
+    voice_id_changed = (old_voice_id != new_voice_id)
+    
+    # 如果是当前活跃的猫娘且voice_id发生了变更，需要先通知前端，再关闭session
+    is_current_catgirl = (name == characters.get('当前猫娘', ''))
+    session_ended = False
+    
+    if voice_id_changed and is_current_catgirl and name in session_manager:
+        # 检查是否有活跃的session
+        if session_manager[name].is_active:
+            logger.info(f"检测到 {name} 的voice_id已变更（{old_voice_id} -> {new_voice_id}），准备刷新...")
+            
+            # 1. 先发送刷新消息（WebSocket还连着）
+            if session_manager[name].websocket:
+                try:
+                    await session_manager[name].websocket.send_text(json.dumps({
+                        "type": "reload_page",
+                        "message": "语音已更新，页面即将刷新"
+                    }))
+                    logger.info(f"已通知 {name} 的前端刷新页面")
+                except Exception as e:
+                    logger.warning(f"通知前端刷新页面失败: {e}")
+            
+            # 2. 立刻关闭session（这会断开WebSocket）
+            try:
+                await session_manager[name].end_session(by_server=True)
+                session_ended = True
+                logger.info(f"{name} 的session已结束")
+            except Exception as e:
+                logger.error(f"结束session时出错: {e}")
+    
     # 自动重新加载配置
-    initialize_character_data()
-    return {"success": True}
+    await initialize_character_data()
+    if voice_id_changed:
+        logger.info(f"配置已重新加载，新的voice_id已生效")
+    
+    return {"success": True, "voice_id_changed": voice_id_changed, "session_restarted": session_ended}
 
 @app.put('/api/characters/catgirl/l2d/{name}')
 async def update_catgirl_l2d(name: str, request: Request):
@@ -962,7 +1230,7 @@ async def update_catgirl_l2d(name: str, request: Request):
         # 保存配置
         _config_manager.save_characters(characters)
         # 自动重新加载配置
-        initialize_character_data()
+        await initialize_character_data()
         
         return JSONResponse(content={
             'success': True,
@@ -987,8 +1255,7 @@ async def update_catgirl_voice_id(name: str, request: Request):
     if 'voice_id' in data:
         voice_id = data['voice_id']
         # 验证voice_id是否在voice_storage中
-        from config import validate_voice_id
-        if not validate_voice_id(voice_id):
+        if not _config_manager.validate_voice_id(voice_id):
             voices = _config_manager.get_voices_for_current_api()
             available_voices = list(voices.keys())
             return JSONResponse({
@@ -998,9 +1265,40 @@ async def update_catgirl_voice_id(name: str, request: Request):
             }, status_code=400)
         characters['猫娘'][name]['voice_id'] = voice_id
     _config_manager.save_characters(characters)
-    # 自动重新加载配置
-    initialize_character_data()
-    return {"success": True}
+    
+    # 如果是当前活跃的猫娘，需要先通知前端，再关闭session
+    is_current_catgirl = (name == characters.get('当前猫娘', ''))
+    session_ended = False
+    
+    if is_current_catgirl and name in session_manager:
+        # 检查是否有活跃的session
+        if session_manager[name].is_active:
+            logger.info(f"检测到 {name} 的voice_id已更新，准备刷新...")
+            
+            # 1. 先发送刷新消息（WebSocket还连着）
+            if session_manager[name].websocket:
+                try:
+                    await session_manager[name].websocket.send_text(json.dumps({
+                        "type": "reload_page",
+                        "message": "语音已更新，页面即将刷新"
+                    }))
+                    logger.info(f"已通知 {name} 的前端刷新页面")
+                except Exception as e:
+                    logger.warning(f"通知前端刷新页面失败: {e}")
+            
+            # 2. 立刻关闭session（这会断开WebSocket）
+            try:
+                await session_manager[name].end_session(by_server=True)
+                session_ended = True
+                logger.info(f"{name} 的session已结束")
+            except Exception as e:
+                logger.error(f"结束session时出错: {e}")
+    
+    # 3. 重新加载配置，让新的voice_id生效
+    await initialize_character_data()
+    logger.info(f"配置已重新加载，新的voice_id已生效")
+    
+    return {"success": True, "session_restarted": session_ended}
 
 @app.post('/api/characters/clear_voice_ids')
 async def clear_voice_ids():
@@ -1018,7 +1316,7 @@ async def clear_voice_ids():
         
         _config_manager.save_characters(characters)
         # 自动重新加载配置
-        initialize_character_data()
+        await initialize_character_data()
         
         return JSONResponse({
             'success': True, 
@@ -1046,7 +1344,7 @@ async def set_microphone(request: Request):
         # 保存配置
         _config_manager.save_characters(characters_data)
         # 自动重新加载配置
-        initialize_character_data()
+        await initialize_character_data()
         
         return {"success": True}
     except Exception as e:
@@ -1197,8 +1495,8 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
         }
         
         logger.info(f"正在上传文件到tfLink，文件名: {file.filename}, 大小: {file_size} bytes, MIME类型: {mime_type}")
-        resp = requests.post('https://tmpfile.link/api/upload', files=files, headers=headers, timeout=60)
-        
+        resp = requests.post('http://47.101.214.205:8000/api/upload', files=files, headers=headers, timeout=60)
+
         # 检查响应状态
         if resp.status_code != 200:
             logger.error(f"上传到tfLink失败，状态码: {resp.status_code}, 响应内容: {resp.text}")
@@ -1211,7 +1509,7 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
             
             # 获取下载链接
             tmp_url = None
-            possible_keys = ['downloadLink', 'download_link', 'url', 'direct_link', 'link']
+            possible_keys = ['downloadLink', 'download_link', 'url', 'direct_link', 'link', 'download_url']
             for key in possible_keys:
                 if key in data:
                     tmp_url = data[key]
@@ -1290,7 +1588,27 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                     'file_url': tmp_url,
                     'created_at': datetime.now().isoformat()
                 }
-                _config_manager.save_voice_for_current_api(voice_id, voice_data)
+                try:
+                    _config_manager.save_voice_for_current_api(voice_id, voice_data)
+                    logger.info(f"voice_id已保存到音色库: {voice_id}")
+                    
+                    # 验证voice_id是否能够被正确读取
+                    if not _config_manager.validate_voice_id(voice_id):
+                        logger.error(f"voice_id保存后验证失败: {voice_id}")
+                        return JSONResponse({
+                            'error': f'音色注册成功但保存验证失败，请重试',
+                            'voice_id': voice_id,
+                            'file_url': tmp_url
+                        }, status_code=500)
+                    logger.info(f"voice_id保存验证成功: {voice_id}")
+                    
+                except Exception as save_error:
+                    logger.error(f"保存voice_id到音色库失败: {save_error}")
+                    return JSONResponse({
+                        'error': f'音色注册成功但保存到音色库失败: {str(save_error)}',
+                        'voice_id': voice_id,
+                        'file_url': tmp_url
+                    }, status_code=500)
                 return JSONResponse({
                     'voice_id': voice_id,
                     'request_id': service.get_last_request_id(),
@@ -1381,13 +1699,46 @@ async def register_voice(request: Request):
 
 @app.delete('/api/characters/catgirl/{name}')
 async def delete_catgirl(name: str):
+    import shutil
+    
     characters = _config_manager.load_characters()
     if name not in characters.get('猫娘', {}):
         return JSONResponse({'success': False, 'error': '猫娘不存在'}, status_code=404)
+    
+    # 检查是否是当前正在使用的猫娘
+    current_catgirl = characters.get('当前猫娘', '')
+    if name == current_catgirl:
+        return JSONResponse({'success': False, 'error': '不能删除当前正在使用的猫娘！请先切换到其他猫娘后再删除。'}, status_code=400)
+    
+    # 删除对应的记忆文件
+    try:
+        memory_paths = [_config_manager.memory_dir, _config_manager.project_memory_dir]
+        files_to_delete = [
+            f'semantic_memory_{name}',  # 语义记忆目录
+            f'time_indexed_{name}',     # 时间索引数据库文件
+            f'settings_{name}.json',    # 设置文件
+            f'recent_{name}.json',      # 最近聊天记录文件
+        ]
+        
+        for base_dir in memory_paths:
+            for file_name in files_to_delete:
+                file_path = base_dir / file_name
+                if file_path.exists():
+                    try:
+                        if file_path.is_dir():
+                            shutil.rmtree(file_path)
+                        else:
+                            file_path.unlink()
+                        logger.info(f"已删除: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"删除失败 {file_path}: {e}")
+    except Exception as e:
+        logger.error(f"删除记忆文件时出错: {e}")
+    
+    # 删除角色配置
     del characters['猫娘'][name]
     _config_manager.save_characters(characters)
-    # 自动重新加载配置
-    initialize_character_data()
+    await initialize_character_data()
     return {"success": True}
 
 @app.post('/api/beacon/shutdown')
@@ -1451,7 +1802,7 @@ async def rename_catgirl(old_name: str, request: Request):
         characters['当前猫娘'] = new_name
     _config_manager.save_characters(characters)
     # 自动重新加载配置
-    initialize_character_data()
+    await initialize_character_data()
     return {"success": True}
 
 @app.post('/api/characters/catgirl/{name}/unregister_voice')
@@ -1471,7 +1822,7 @@ async def unregister_voice(name: str):
             characters['猫娘'][name].pop('voice_id')
         _config_manager.save_characters(characters)
         # 自动重新加载配置
-        initialize_character_data()
+        await initialize_character_data()
         
         logger.info(f"已解除猫娘 '{name}' 的声音注册")
         return {"success": True, "message": "声音注册已解除"}
@@ -1491,7 +1842,7 @@ async def get_recent_files():
 
 @app.get('/api/memory/review_config')
 async def get_review_config():
-    """获取记忆审阅配置"""
+    """获取记忆整理配置"""
     try:
         from utils.config_manager import get_config_manager
         config_manager = get_config_manager()
@@ -1505,12 +1856,12 @@ async def get_review_config():
             # 如果配置文件不存在，默认返回True（开启）
             return {"enabled": True}
     except Exception as e:
-        logger.error(f"读取记忆审阅配置失败: {e}")
+        logger.error(f"读取记忆整理配置失败: {e}")
         return {"enabled": True}
 
 @app.post('/api/memory/review_config')
 async def update_review_config(request: Request):
-    """更新记忆审阅配置"""
+    """更新记忆整理配置"""
     try:
         data = await request.json()
         enabled = data.get('enabled', True)
@@ -1532,10 +1883,10 @@ async def update_review_config(request: Request):
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"记忆审阅配置已更新: enabled={enabled}")
+        logger.info(f"记忆整理配置已更新: enabled={enabled}")
         return {"success": True, "enabled": enabled}
     except Exception as e:
-        logger.error(f"更新记忆审阅配置失败: {e}")
+        logger.error(f"更新记忆整理配置失败: {e}")
         return {"success": False, "error": str(e)}
 
 @app.get('/api/memory/recent_file')
@@ -1841,7 +2192,6 @@ async def upload_live2d_model(files: list[UploadFile] = File(...)):
             
     except Exception as e:
         logger.error(f"上传Live2D模型失败: {e}")
-        logger.error(traceback.format_exc())
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 @app.post('/api/live2d/emotion_mapping/{model_name}')
@@ -2059,8 +2409,6 @@ async def emotion_analysis(request: Request):
             
     except Exception as e:
         logger.error(f"情感分析失败: {e}")
-        import traceback
-        traceback.print_exc()
         return {
             "error": f"情感分析失败: {str(e)}",
             "emotion": "neutral",
@@ -2071,38 +2419,12 @@ async def emotion_analysis(request: Request):
 async def memory_browser(request: Request):
     return templates.TemplateResponse('templates/memory_browser.html', {"request": request})
 
-@app.get("/focus/{lanlan_name}", response_class=HTMLResponse)
-async def get_focus_index(request: Request, lanlan_name: str):
-    # 每次动态获取角色数据
-    _, _, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
-    # 获取live2d字段
-    live2d = lanlan_basic_config.get(lanlan_name, {}).get('live2d', 'mao_pro')
-    # 查找所有模型
-    models = find_models()
-    # 根据live2d字段查找对应的model path
-    model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
-    return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": lanlan_name,
-        "model_path": model_path,
-        "focus_mode": True
-    })
 
 @app.get("/{lanlan_name}", response_class=HTMLResponse)
 async def get_index(request: Request, lanlan_name: str):
-    # 每次动态获取角色数据
-    _, _, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
-    # 获取live2d字段
-    live2d = lanlan_basic_config.get(lanlan_name, {}).get('live2d', 'mao_pro')
-    # 查找所有模型
-    models = find_models()
-    # 根据live2d字段查找对应的model path
-    model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
+    # lanlan_name 将从 URL 中提取，前端会通过 API 获取配置
     return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": lanlan_name,
-        "model_path": model_path,
-        "focus_mode": False
+        "request": request
     })
 
 @app.post('/api/agent/flags')
@@ -2302,6 +2624,18 @@ if __name__ == "__main__":
     logger.info(f"Serving index.html from: {os.path.abspath('templates/index.html')}")
     logger.info(f"Access UI at: http://127.0.0.1:{MAIN_SERVER_PORT} (or your network IP:{MAIN_SERVER_PORT})")
     logger.info("-----------------------------")
+
+    # Custom logging filter to suppress specific endpoints
+    class EndpointFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            # Suppress only INFO level logs for specific endpoints
+            # Keep WARNING and ERROR logs
+            if record.levelno > logging.INFO:
+                return True
+            return record.getMessage().find("/api/characters/current_catgirl") == -1
+
+    # Add filter to uvicorn access logger
+    logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
     # 1) 配置 UVicorn
     config = uvicorn.Config(

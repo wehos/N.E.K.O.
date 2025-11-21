@@ -6,6 +6,7 @@ mimetypes.add_type("application/javascript", ".js")
 import asyncio
 import json
 import os
+import logging
 from config import MONITOR_SERVER_PORT
 from utils.config_manager import get_config_manager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -14,28 +15,68 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import uvicorn
 from fastapi.templating import Jinja2Templates
 from utils.frontend_utils import find_models, find_model_config_file
-templates = Jinja2Templates(directory="./")
+
+# Setup logger
+from utils.logger_config import setup_logging
+logger, log_config = setup_logging(service_name="Monitor", log_level=logging.INFO)
+
+# 获取资源路径（支持打包后的环境）
+def get_resource_path(relative_path):
+    """获取资源的绝对路径，支持开发环境和打包后的环境"""
+    if getattr(sys, 'frozen', False):
+        # 打包后的环境
+        base_path = sys._MEIPASS
+    else:
+        # 开发环境
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+templates = Jinja2Templates(directory=get_resource_path(""))
 
 app = FastAPI()
 
 # 挂载静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=get_resource_path("static")), name="static")
 _config_manager = get_config_manager()
-
-@app.get("/streamer")
-async def get_stream():
-    return FileResponse('templates/streamer.html')
 
 @app.get("/subtitle")
 async def get_subtitle():
-    return FileResponse('templates/subtitle.html')
+    return FileResponse(get_resource_path('templates/subtitle.html'))
+
+@app.get("/api/config/page_config")
+async def get_page_config(lanlan_name: str = ""):
+    """获取页面配置（lanlan_name 和 model_path）"""
+    try:
+        # 获取角色数据
+        _, her_name, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
+        
+        # 如果提供了 lanlan_name 参数，使用它；否则使用当前角色
+        target_name = lanlan_name if lanlan_name else her_name
+        
+        # 获取 live2d 字段
+        live2d = lanlan_basic_config.get(target_name, {}).get('live2d', 'mao_pro')
+        
+        # 查找所有模型
+        models = find_models()
+        
+        # 根据 live2d 字段查找对应的 model path
+        model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
+        
+        return {
+            "success": True,
+            "lanlan_name": target_name,
+            "model_path": model_path
+        }
+    except Exception as e:
+        logger.error(f"获取页面配置失败: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.get('/api/live2d/emotion_mapping/{model_name}')
 async def get_emotion_mapping(model_name: str):
     """获取情绪映射配置"""
     try:
         # 在模型目录中查找.model3.json文件
-        model_dir = os.path.join('static', model_name)
+        model_dir = get_resource_path(os.path.join('static', model_name))
         if not os.path.exists(model_dir):
             return JSONResponse(status_code=404, content={"success": False, "error": "模型目录不存在"})
         
@@ -98,18 +139,9 @@ async def get_emotion_mapping(model_name: str):
 
 @app.get("/{lanlan_name}", response_class=HTMLResponse)
 async def get_index(request: Request, lanlan_name: str):
-    # 获取角色配置
-    _, _, _, lanlan_basic_config, _, _, _, _, _, _ = _config_manager.get_character_data()
-    # 获取live2d字段
-    live2d = lanlan_basic_config.get(lanlan_name, {}).get('live2d', 'mao_pro')
-    # 查找所有模型
-    models = find_models()
-    # 根据live2d字段查找对应的model path
-    model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
+    # lanlan_name 将从 URL 中提取，前端会通过 API 获取配置
     return templates.TemplateResponse("templates/viewer.html", {
-        "request": request,
-        "lanlan_name": lanlan_name,
-        "model_path": model_path
+        "request": request
     })
 
 
@@ -245,9 +277,7 @@ async def sync_endpoint(websocket: WebSocket, lanlan_name:str):
     except WebSocketDisconnect:
         print(f"❌ [SYNC] 主服务器已断开: {websocket.client}")
     except Exception as e:
-        print(f"❌ [SYNC] 同步端点错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ [SYNC] 同步端点错误: {e}")
 
 
 # 二进制数据同步端点
@@ -267,9 +297,7 @@ async def sync_binary_endpoint(websocket: WebSocket, lanlan_name:str):
     except WebSocketDisconnect:
         print(f"❌ [BINARY] 主服务器二进制连接已断开: {websocket.client}")
     except Exception as e:
-        print(f"❌ [BINARY] 二进制同步端点错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ [BINARY] 二进制同步端点错误: {e}")
 
 
 # 客户端连接端点
@@ -377,4 +405,5 @@ async def cleanup_disconnected_clients():
 
 
 if __name__ == "__main__":
-    uvicorn.run("monitor:app", host="0.0.0.0", port=MONITOR_SERVER_PORT, reload=True)
+    # 在打包环境中，直接传递 app 对象而不是字符串
+    uvicorn.run(app, host="0.0.0.0", port=MONITOR_SERVER_PORT, reload=False)

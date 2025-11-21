@@ -16,6 +16,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import shutil
 
+from config import APP_NAME
+
 
 class RobustLoggerConfig:
     """鲁棒的日志配置类"""
@@ -26,19 +28,21 @@ class RobustLoggerConfig:
     DEFAULT_BACKUP_COUNT = 5  # Keep 5 backup files
     DEFAULT_LOG_RETENTION_DAYS = 30  # Keep logs for 30 days
     
-    def __init__(self, app_name="Xiao8", log_level=None, max_bytes=None, 
+    def __init__(self, app_name=None, service_name=None, log_level=None, max_bytes=None, 
                  backup_count=None, retention_days=None):
         """
         初始化日志配置
         
         Args:
-            app_name: 应用名称，用于创建日志目录
+            app_name: 应用名称，用于创建日志目录，默认使用配置中的 APP_NAME
+            service_name: 服务名称，用于区分不同服务的日志文件（如Main、Memory、Agent）
             log_level: 日志级别
             max_bytes: 单个日志文件的最大大小
             backup_count: 保留的备份文件数量
             retention_days: 日志保留天数
         """
-        self.app_name = app_name
+        self.app_name = app_name if app_name is not None else APP_NAME
+        self.service_name = service_name  # 服务名称用于文件名区分
         self.log_level = log_level or self.DEFAULT_LOG_LEVEL
         self.max_bytes = max_bytes or self.DEFAULT_MAX_BYTES
         self.backup_count = backup_count or self.DEFAULT_BACKUP_COUNT
@@ -46,7 +50,13 @@ class RobustLoggerConfig:
         
         # 获取日志目录
         self.log_dir = self._get_log_directory()
-        self.log_file = self.log_dir / f"{app_name}_{datetime.now().strftime('%Y%m%d')}.log"
+        
+        # 日志文件名：如果有service_name则包含，否则只用app_name
+        if self.service_name:
+            log_filename = f"{self.app_name}_{self.service_name}_{datetime.now().strftime('%Y%m%d')}.log"
+        else:
+            log_filename = f"{self.app_name}_{datetime.now().strftime('%Y%m%d')}.log"
+        self.log_file = self.log_dir / log_filename
         
         # 确保日志目录存在
         self._ensure_log_directory()
@@ -58,7 +68,7 @@ class RobustLoggerConfig:
         """
         获取合适的日志目录
         优先级：
-        1. 用户文档目录/Xiao8/logs（我的文档，默认首选）
+        1. 用户文档目录/{APP_NAME}/logs（我的文档，默认首选）
         2. 应用程序所在目录/logs
         3. 用户数据目录（AppData等）
         4. 用户主目录
@@ -70,8 +80,8 @@ class RobustLoggerConfig:
         # 尝试1: 使用用户文档目录（我的文档，默认首选！）
         try:
             docs_dir = self._get_documents_directory()
-            # 统一使用 Xiao8 目录，不带后缀
-            log_dir = docs_dir / "Xiao8" / "logs"
+            # 使用配置的应用名称目录
+            log_dir = docs_dir / self.app_name / "logs"
             if self._test_directory_writable(log_dir):
                 return log_dir
         except Exception as e:
@@ -206,7 +216,19 @@ class RobustLoggerConfig:
             bool: 是否可写
         """
         try:
-            directory.mkdir(parents=True, exist_ok=True)
+            # 分步创建目录，避免parents=True在打包后可能出现的问题
+            # 收集所有需要创建的父目录
+            dirs_to_create = []
+            current = directory
+            while current and not current.exists():
+                dirs_to_create.append(current)
+                current = current.parent
+            
+            # 从最顶层开始创建目录
+            for dir_path in reversed(dirs_to_create):
+                if not dir_path.exists():
+                    dir_path.mkdir(exist_ok=True)
+            
             # 尝试创建一个测试文件
             test_file = directory / ".write_test"
             test_file.write_text("test")
@@ -218,7 +240,17 @@ class RobustLoggerConfig:
     def _ensure_log_directory(self):
         """确保日志目录存在"""
         try:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
+            # 分步创建目录，避免parents=True在打包后可能出现的问题
+            dirs_to_create = []
+            current = self.log_dir
+            while current and not current.exists():
+                dirs_to_create.append(current)
+                current = current.parent
+            
+            # 从最顶层开始创建目录
+            for dir_path in reversed(dirs_to_create):
+                if not dir_path.exists():
+                    dir_path.mkdir(exist_ok=True)
         except Exception as e:
             print(f"Error: Failed to create log directory: {e}", file=sys.stderr)
             raise
@@ -300,7 +332,11 @@ class RobustLoggerConfig:
         
         # 3. 错误日志Handler（单独记录ERROR及以上级别）
         try:
-            error_log_file = self.log_dir / f"{self.app_name}_error.log"
+            if self.service_name:
+                error_filename = f"{self.app_name}_{self.service_name}_error.log"
+            else:
+                error_filename = f"{self.app_name}_error.log"
+            error_log_file = self.log_dir / error_filename
             error_handler = RotatingFileHandler(
                 error_log_file,
                 maxBytes=self.max_bytes,
@@ -316,22 +352,63 @@ class RobustLoggerConfig:
         return logger
 
 
-def setup_logging(app_name="Xiao8", log_level=None):
+class EnhancedLogger:
+    """增强的Logger包装器，自动处理traceback"""
+    
+    def __init__(self, logger):
+        self._logger = logger
+    
+    def __getattr__(self, name):
+        """代理所有其他方法到原始logger"""
+        return getattr(self._logger, name)
+    
+    def error(self, msg, *args, exc_info=None, **kwargs):
+        """
+        增强的error方法，自动包含traceback
+        
+        Args:
+            msg: 错误消息
+            exc_info: 是否包含异常信息，默认True（自动检测）
+            *args, **kwargs: 传递给原始logger.error的其他参数
+        """
+        # 如果在异常上下文中且未明确指定exc_info，自动设置为True
+        if exc_info is None:
+            import sys
+            exc_info = sys.exc_info()[0] is not None
+        
+        self._logger.error(msg, *args, exc_info=exc_info, **kwargs)
+    
+    def exception(self, msg, *args, **kwargs):
+        """异常记录方法（始终包含traceback）"""
+        self._logger.exception(msg, *args, **kwargs)
+
+
+def setup_logging(app_name=None, service_name=None, log_level=None):
     """
     便捷函数：设置日志配置
     
     Args:
-        app_name: 应用名称
+        app_name: 应用名称，默认使用配置中的 APP_NAME（用于确定日志目录）
+        service_name: 服务名称，用于区分不同服务的日志文件（如Main、Memory、Agent）
         log_level: 日志级别
         
     Returns:
-        tuple: (logger实例, 日志配置对象)
+        tuple: (增强的logger实例, 日志配置对象)
+        
+    注意：
+        返回的logger会自动在error()调用时包含traceback（如果在异常上下文中）
+        也可以使用logger.exception()来明确记录异常信息
     """
-    config = RobustLoggerConfig(app_name=app_name, log_level=log_level)
-    logger = config.setup_logger()
+    config = RobustLoggerConfig(app_name=app_name, service_name=service_name, log_level=log_level)
+    base_logger = config.setup_logger()
+    
+    # 包装为增强logger
+    logger = EnhancedLogger(base_logger)
     
     # 记录日志配置信息
-    logger.info(f"=== {app_name} 日志系统已初始化 ===")
+    service_info = f"{service_name}" if service_name else config.app_name
+    logger.info(f"=== {service_info} 日志系统已初始化 ===")
+    logger.info(f"日志目录: {config.get_log_directory_path()}")
     logger.info(f"日志级别: {logging.getLevelName(config.log_level)}")
     logger.info("=" * 50)
     
@@ -339,7 +416,7 @@ def setup_logging(app_name="Xiao8", log_level=None):
 
 
 # 导出主要接口
-__all__ = ['RobustLoggerConfig', 'setup_logging']
+__all__ = ['RobustLoggerConfig', 'EnhancedLogger', 'setup_logging']
 
 
 if __name__ == "__main__":

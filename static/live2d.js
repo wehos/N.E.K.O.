@@ -11,6 +11,9 @@ let isInitialized = false;
 let motionTimer = null; // 动作持续时间定时器
 let isEmotionChanging = false; // 防止快速连续点击的标志
 
+// 全局：判断是否为移动端宽度
+const isMobileWidth = () => window.innerWidth <= 768;
+
 // Live2D 管理器类
 class Live2DManager {
     constructor() {
@@ -43,6 +46,9 @@ class Live2DManager {
         this._floatingButtons = {}; // 存储所有按钮元素
         this._popupTimers = {}; // 存储弹出框的定时器
         this._goodbyeClicked = false; // 标记是否点击了"请她离开"
+        
+        // 已打开的设置窗口引用映射（URL -> Window对象）
+        this._openSettingsWindows = {};
 
         // 口型同步控制
         this.mouthValue = 0; // 0~1
@@ -823,7 +829,124 @@ class Live2DManager {
             return model;
         } catch (error) {
             console.error('加载模型失败:', error);
-            throw error;
+            
+            // 尝试回退到默认模型
+            if (modelPath !== '/static/mao_pro/mao_pro.model3.json') {
+                console.warn('模型加载失败，尝试回退到默认模型: mao_pro');
+                try {
+                    const defaultModelPath = '/static/mao_pro/mao_pro.model3.json';
+                    const model = await Live2DModel.from(defaultModelPath, { autoInteract: false });
+                    this.currentModel = model;
+
+                    // 解析模型目录名与根路径，供资源解析使用
+                    try {
+                        const cleanPath = defaultModelPath.split('#')[0].split('?')[0];
+                        const lastSlash = cleanPath.lastIndexOf('/');
+                        const rootDir = lastSlash >= 0 ? cleanPath.substring(0, lastSlash) : '/static';
+                        this.modelRootPath = rootDir;
+                        const parts = rootDir.split('/').filter(Boolean);
+                        this.modelName = parts.length > 0 ? parts[parts.length - 1] : null;
+                        console.log('回退模型根路径解析:', { modelUrl: defaultModelPath, modelName: this.modelName, modelRootPath: this.modelRootPath });
+                    } catch (e) {
+                        console.warn('解析回退模型根路径失败，将使用默认值', e);
+                        this.modelRootPath = '/static';
+                        this.modelName = null;
+                    }
+
+                    // 配置渲染纹理数量以支持更多蒙版
+                    if (model.internalModel && model.internalModel.renderer && model.internalModel.renderer._clippingManager) {
+                        model.internalModel.renderer._clippingManager._renderTextureCount = 3;
+                        if (typeof model.internalModel.renderer._clippingManager.initialize === 'function') {
+                            model.internalModel.renderer._clippingManager.initialize(
+                                model.internalModel.coreModel,
+                                model.internalModel.coreModel.getDrawableCount(),
+                                model.internalModel.coreModel.getDrawableMasks(),
+                                model.internalModel.coreModel.getDrawableMaskCounts(),
+                                3
+                            );
+                        }
+                        console.log('回退模型渲染纹理数量已设置为3');
+                    }
+
+                    // 应用位置和缩放设置
+                    this.applyModelSettings(model, options);
+
+                    // 添加到舞台
+                    this.pixi_app.stage.addChild(model);
+
+                    // 设置交互性
+                    if (options.dragEnabled !== false) {
+                        this.setupDragAndDrop(model);
+                    }
+
+                    // 设置滚轮缩放
+                    if (options.wheelEnabled !== false) {
+                        this.setupWheelZoom(model);
+                    }
+                    
+                    // 设置触摸缩放（双指捏合）
+                    if (options.touchZoomEnabled !== false) {
+                        this.setupTouchZoom(model);
+                    }
+
+                    // 启用鼠标跟踪
+                    if (options.mouseTracking !== false) {
+                        this.enableMouseTracking(model);
+                    }
+
+                    // 设置浮动按钮系统（在模型完全就绪后再绑定ticker回调）
+                    this.setupFloatingButtons(model);
+                    
+                    // 设置原来的锁按钮
+                    this.setupHTMLLockIcon(model);
+
+                    // 安装口型覆盖逻辑（屏蔽 motion 对嘴巴的控制）
+                    try {
+                        this.installMouthOverride();
+                        console.log('回退模型已安装口型覆盖');
+                    } catch (e) {
+                        console.warn('回退模型安装口型覆盖失败:', e);
+                    }
+
+                    // 加载 FileReferences 与 EmotionMapping
+                    if (options.loadEmotionMapping !== false) {
+                        const settings = model.internalModel && model.internalModel.settings && model.internalModel.settings.json;
+                        if (settings) {
+                            // 保存原始 FileReferences
+                            this.fileReferences = settings.FileReferences || null;
+
+                            // 优先使用顶层 EmotionMapping，否则从 FileReferences 推导
+                            if (settings.EmotionMapping && (settings.EmotionMapping.expressions || settings.EmotionMapping.motions)) {
+                                this.emotionMapping = settings.EmotionMapping;
+                            } else {
+                                this.emotionMapping = this.deriveEmotionMappingFromFileRefs(this.fileReferences || {});
+                            }
+                            console.log('回退模型已加载情绪映射:', this.emotionMapping);
+                        } else {
+                            console.warn('回退模型配置中未找到 settings.json，无法加载情绪映射');
+                        }
+                    }
+
+                    // 先从服务器同步映射（覆盖"常驻"），再设置常驻表情
+                    try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
+                    // 设置常驻表情（根据 EmotionMapping.expressions.常驻 或 FileReferences 前缀推导）
+                    await this.setupPersistentExpressions();
+
+                    // 调用回调函数
+                    if (this.onModelLoaded) {
+                        this.onModelLoaded(model, defaultModelPath);
+                    }
+
+                    console.log('成功回退到默认模型: mao_pro');
+                    return model;
+                } catch (fallbackError) {
+                    console.error('回退到默认模型也失败:', fallbackError);
+                    throw new Error(`原始模型加载失败: ${error.message}，且回退模型也失败: ${fallbackError.message}`);
+                }
+            } else {
+                // 如果已经是默认模型，直接抛出错误
+                throw error;
+            }
         }
     }
 
@@ -1214,17 +1337,43 @@ class Live2DManager {
         document.body.appendChild(buttonsContainer);
         this._floatingButtonsContainer = buttonsContainer;
 
+		// 响应式：小屏时固定在右下角并横向排列（使用全局 isMobileWidth）
+		const applyResponsiveFloatingLayout = () => {
+			if (isMobileWidth()) {
+				// 移动端：固定在右下角，纵向排布，整体上移100px
+				buttonsContainer.style.flexDirection = 'column';
+				buttonsContainer.style.bottom = '116px';
+				buttonsContainer.style.right = '16px';
+				buttonsContainer.style.left = '';
+				buttonsContainer.style.top = '';
+			} else {
+				// 桌面端：恢复纵向排布，由 ticker 动态定位
+				buttonsContainer.style.flexDirection = 'column';
+				buttonsContainer.style.bottom = '';
+				buttonsContainer.style.right = '';
+			}
+		};
+		applyResponsiveFloatingLayout();
+		window.addEventListener('resize', applyResponsiveFloatingLayout);
+
         // 定义按钮配置（从上到下：麦克风、显示屏、锤子、设置、睡觉）
+        // 添加版本号防止缓存（更新图标时修改这个版本号）
+        const iconVersion = '?v=' + Date.now();
+        
         const buttonConfigs = [
-            { id: 'mic', emoji: '🎤', title: '语音控制', hasPopup: true, toggle: true, separatePopupTrigger: true, iconOff: '/static/icons/mic_icon_off.png', iconOn: '/static/icons/mic_icon_on.png' },
-            { id: 'screen', emoji: '🖥️', title: '屏幕分享', hasPopup: false, toggle: true, iconOff: '/static/icons/screen_icon_off.png', iconOn: '/static/icons/screen_icon_on.png' },
-            { id: 'agent', emoji: '🔨', title: 'Agent工具', hasPopup: true, popupToggle: true, exclusive: 'settings', iconOff: '/static/icons/Agent_off.png', iconOn: '/static/icons/Agent_on.png' },
-            { id: 'settings', emoji: '⚙️', title: '设置', hasPopup: true, popupToggle: true, exclusive: 'agent', iconOff: '/static/icons/set_off.png', iconOn: '/static/icons/set_on.png' },
-            { id: 'goodbye', emoji: '💤', title: '请她离开', hasPopup: false, iconOff: '/static/icons/rest_off.png', iconOn: '/static/icons/rest_on.png' }
+            { id: 'mic', emoji: '🎤', title: window.t ? window.t('buttons.voiceControl') : '语音控制', titleKey: 'buttons.voiceControl', hasPopup: true, toggle: true, separatePopupTrigger: true, iconOff: '/static/icons/mic_icon_off.png' + iconVersion, iconOn: '/static/icons/mic_icon_on.png' + iconVersion },
+            { id: 'screen', emoji: '🖥️', title: window.t ? window.t('buttons.screenShare') : '屏幕分享', titleKey: 'buttons.screenShare', hasPopup: false, toggle: true, iconOff: '/static/icons/screen_icon_off.png' + iconVersion, iconOn: '/static/icons/screen_icon_on.png' + iconVersion },
+            { id: 'agent', emoji: '🔨', title: window.t ? window.t('buttons.agentTools') : 'Agent工具', titleKey: 'buttons.agentTools', hasPopup: true, popupToggle: true, exclusive: 'settings', iconOff: '/static/icons/Agent_off.png' + iconVersion, iconOn: '/static/icons/Agent_on.png' + iconVersion },
+            { id: 'settings', emoji: '⚙️', title: window.t ? window.t('buttons.settings') : '设置', titleKey: 'buttons.settings', hasPopup: true, popupToggle: true, exclusive: 'agent', iconOff: '/static/icons/set_off.png' + iconVersion, iconOn: '/static/icons/set_on.png' + iconVersion },
+            { id: 'goodbye', emoji: '💤', title: window.t ? window.t('buttons.leave') : '请她离开', titleKey: 'buttons.leave', hasPopup: false, iconOff: '/static/icons/rest_off.png' + iconVersion, iconOn: '/static/icons/rest_on.png' + iconVersion }
         ];
 
         // 创建主按钮
         buttonConfigs.forEach(config => {
+			// 移动端隐藏 agent 和 goodbye 按钮
+			if (isMobileWidth() && (config.id === 'agent' || config.id === 'goodbye')) {
+				return;
+			}
             const btnWrapper = document.createElement('div');
             btnWrapper.style.position = 'relative';
             btnWrapper.style.display = 'flex';
@@ -1235,6 +1384,9 @@ class Live2DManager {
             btn.id = `live2d-btn-${config.id}`;
             btn.className = 'live2d-floating-btn';
             btn.title = config.title;
+            if (config.titleKey) {
+                btn.setAttribute('data-i18n-title', config.titleKey);
+            }
             
             let imgOff = null; // off状态图片
             let imgOn = null;  // on状态图片
@@ -1452,7 +1604,18 @@ class Live2DManager {
                 btnWrapper.appendChild(btn);
                 
                 // 如果有弹出框且需要独立的触发器（仅麦克风）
-                if (config.hasPopup && config.separatePopupTrigger) {
+				if (config.hasPopup && config.separatePopupTrigger) {
+					// 手机模式下移除麦克风弹窗与触发器
+					if (isMobileWidth() && config.id === 'mic') {
+						buttonsContainer.appendChild(btnWrapper);
+						this._floatingButtons[config.id] = { 
+							button: btn, 
+							wrapper: btnWrapper,
+							imgOff: imgOff,
+							imgOn: imgOn
+						};
+						return;
+					}
                     const popup = this.createPopup(config.id);
                     
                     // 创建三角按钮（用于触发弹出框）
@@ -1526,6 +1689,95 @@ class Live2DManager {
 
         console.log('[Live2D] 所有浮动按钮已创建完成');
 
+        // 创建独立的"请她回来"按钮（固定在页面中间）
+        const returnButtonContainer = document.createElement('div');
+        returnButtonContainer.id = 'live2d-return-button-container';
+        Object.assign(returnButtonContainer.style, {
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: '30',
+            pointerEvents: 'none',
+            display: 'none' // 初始隐藏，只在点击"请她离开"后显示
+        });
+
+        const returnBtn = document.createElement('div');
+        returnBtn.id = 'live2d-btn-return';
+        returnBtn.className = 'live2d-return-btn';
+        returnBtn.title = window.t ? window.t('buttons.return') : '请她回来';
+        returnBtn.setAttribute('data-i18n-title', 'buttons.return');
+        
+        // 使用与"请她离开"相同的图标
+        const imgOff = document.createElement('img');
+        imgOff.src = '/static/icons/rest_off.png' + iconVersion;
+        imgOff.alt = window.t ? window.t('buttons.return') : '请她回来';
+        Object.assign(imgOff.style, {
+            width: '64px',
+            height: '64px',
+            objectFit: 'contain',
+            pointerEvents: 'none',
+            opacity: '1',
+            transition: 'opacity 0.3s ease'
+        });
+        
+        const imgOn = document.createElement('img');
+        imgOn.src = '/static/icons/rest_on.png' + iconVersion;
+        imgOn.alt = window.t ? window.t('buttons.return') : '请她回来';
+        Object.assign(imgOn.style, {
+            position: 'absolute',
+            width: '64px',
+            height: '64px',
+            objectFit: 'contain',
+            pointerEvents: 'none',
+            opacity: '0',
+            transition: 'opacity 0.3s ease'
+        });
+        
+        Object.assign(returnBtn.style, {
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: 'rgba(255, 255, 255, 0.8)',
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            userSelect: 'none',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            transition: 'all 0.3s ease',
+            pointerEvents: 'auto',
+            position: 'relative'
+        });
+
+        // 悬停效果
+        returnBtn.addEventListener('mouseenter', () => {
+            returnBtn.style.transform = 'scale(1.1)';
+            returnBtn.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.4)';
+            imgOff.style.opacity = '0';
+            imgOn.style.opacity = '1';
+        });
+
+        returnBtn.addEventListener('mouseleave', () => {
+            returnBtn.style.transform = 'scale(1)';
+            returnBtn.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.3)';
+            imgOff.style.opacity = '1';
+            imgOn.style.opacity = '0';
+        });
+
+        returnBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const event = new CustomEvent('live2d-return-click');
+            window.dispatchEvent(event);
+        });
+
+        returnBtn.appendChild(imgOff);
+        returnBtn.appendChild(imgOn);
+        returnButtonContainer.appendChild(returnBtn);
+        document.body.appendChild(returnButtonContainer);
+        this._returnButtonContainer = returnButtonContainer;
+
         // 初始状态
         container.style.pointerEvents = this.isLocked ? 'none' : 'auto';
 
@@ -1535,6 +1787,10 @@ class Live2DManager {
                 if (!model || !model.parent) {
                     return;
                 }
+				// 移动端固定位置，不随模型移动
+				if (isMobileWidth()) {
+					return;
+				}
                 const bounds = model.getBounds();
                 const screenWidth = window.innerWidth;
                 const screenHeight = window.innerHeight;
@@ -1562,16 +1818,15 @@ class Live2DManager {
         
         // 页面加载时先显示5秒
         setTimeout(() => {
-            // 只有在未点击"请她离开"时才显示
-            if (!this._goodbyeClicked) {
-                buttonsContainer.style.display = 'flex';
-                setTimeout(() => {
-                    // 5秒后如果鼠标不在附近且未点击"请她离开"就隐藏
-                    if (!this.isFocusing && !this._goodbyeClicked) {
-                        buttonsContainer.style.display = 'none';
-                    }
-                }, 5000);
-            }
+            // 显示浮动按钮容器
+            buttonsContainer.style.display = 'flex';
+            
+            setTimeout(() => {
+                // 5秒后的隐藏逻辑：如果鼠标不在附近就隐藏
+                if (!this.isFocusing) {
+                    buttonsContainer.style.display = 'none';
+                }
+            }, 5000);
         }, 100); // 延迟100ms确保位置已计算
     }
 
@@ -1627,9 +1882,9 @@ class Live2DManager {
             popup.appendChild(statusDiv);
             
             const agentToggles = [
-                { id: 'agent-master', label: 'Agent总开关' },
-                { id: 'agent-keyboard', label: '键鼠控制' },
-                { id: 'agent-mcp', label: 'MCP工具' }
+                { id: 'agent-master', label: window.t ? window.t('settings.toggles.agentMaster') : 'Agent总开关', labelKey: 'settings.toggles.agentMaster' },
+                { id: 'agent-keyboard', label: window.t ? window.t('settings.toggles.keyboardControl') : '键鼠控制', labelKey: 'settings.toggles.keyboardControl' },
+                { id: 'agent-mcp', label: window.t ? window.t('settings.toggles.mcpTools') : 'MCP工具', labelKey: 'settings.toggles.mcpTools' }
             ];
             
             agentToggles.forEach(toggle => {
@@ -1657,67 +1912,123 @@ class Live2DManager {
                 // 创建自定义圆形指示器
                 const indicator = document.createElement('div');
                 Object.assign(indicator.style, {
-                    width: '16px',
-                    height: '16px',
+                    width: '20px',
+                    height: '20px',
                     borderRadius: '50%',
                     border: '2px solid #ccc',
                     backgroundColor: 'transparent',
                     cursor: 'pointer',
                     flexShrink: '0',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
+                    position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
                 });
+                
+                // 创建对勾图标（初始隐藏）
+                const checkmark = document.createElement('div');
+                checkmark.innerHTML = '✓';
+                Object.assign(checkmark.style, {
+                    color: '#fff',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    lineHeight: '1',
+                    opacity: '0',
+                    transition: 'opacity 0.2s ease',
+                    pointerEvents: 'none',
+                    userSelect: 'none'
+                });
+                indicator.appendChild(checkmark);
                 
                 const label = document.createElement('label');
                 label.innerText = toggle.label;
+                if (toggle.labelKey) {
+                    label.setAttribute('data-i18n', toggle.labelKey);
+                }
                 label.htmlFor = `live2d-${toggle.id}`;
                 label.style.cursor = 'pointer';
                 label.style.userSelect = 'none';
                 label.style.fontSize = '13px';
                 label.style.color = '#333';  // 文本始终为深灰色，不随选中状态改变
                 
-                // 根据 checkbox 状态更新指示器颜色（文本颜色保持不变）
-                const updateStyle = () => {
-                    if (checkbox.checked) {
-                        // 选中状态：蓝色填充，无边框
-                        indicator.style.backgroundColor = '#44b7fe';
-                        indicator.style.borderColor = '#44b7fe';
-                    } else {
-                        // 未选中状态：灰色边框，透明填充
-                        indicator.style.backgroundColor = 'transparent';
-                        indicator.style.borderColor = '#ccc';
+                // 更新标签文本的函数
+                const updateLabelText = () => {
+                    if (toggle.labelKey && window.t) {
+                        label.innerText = window.t(toggle.labelKey);
                     }
                 };
+                
+                // 同步 title 属性
+                const updateTitle = () => {
+                    const title = checkbox.title || '';
+                    label.title = toggleItem.title = title;
+                };
+                
+                // 根据 checkbox 状态更新指示器颜色和对勾显示
+                const updateStyle = () => {
+                    if (checkbox.checked) {
+                        // 选中状态：蓝色填充，显示对勾
+                        indicator.style.backgroundColor = '#44b7fe';
+                        indicator.style.borderColor = '#44b7fe';
+                        checkmark.style.opacity = '1';
+                    } else {
+                        // 未选中状态：灰色边框，透明填充，隐藏对勾
+                        indicator.style.backgroundColor = 'transparent';
+                        indicator.style.borderColor = '#ccc';
+                        checkmark.style.opacity = '0';
+                    }
+                };
+                
+                // 更新禁用状态的视觉反馈
+                const updateDisabledStyle = () => {
+                    const disabled = checkbox.disabled;
+                    const cursor = disabled ? 'default' : 'pointer';
+                    [toggleItem, label, indicator].forEach(el => el.style.cursor = cursor);
+                    toggleItem.style.opacity = disabled ? '0.5' : '1';
+                };
+                
+                // 监听 checkbox 的 disabled 和 title 属性变化
+                const disabledObserver = new MutationObserver(() => {
+                    updateDisabledStyle();
+                    if (checkbox.hasAttribute('title')) updateTitle();
+                });
+                disabledObserver.observe(checkbox, { attributes: true, attributeFilter: ['disabled', 'title'] });
                 
                 // 监听 checkbox 状态变化
                 checkbox.addEventListener('change', updateStyle);
                 
-                // 初始化样式（根据当前状态）
+                // 初始化样式
                 updateStyle();
+                updateDisabledStyle();
+                updateTitle();
                 
                 toggleItem.appendChild(checkbox);
                 toggleItem.appendChild(indicator);
                 toggleItem.appendChild(label);
                 popup.appendChild(toggleItem);
                 
+                // 存储更新函数
+                if (toggle.labelKey) {
+                    toggleItem._updateLabelText = updateLabelText;
+                }
+                
+                // 鼠标悬停效果
                 toggleItem.addEventListener('mouseenter', () => {
-                    toggleItem.style.background = 'rgba(79, 140, 255, 0.1)';
+                    if (checkbox.disabled && checkbox.title?.includes('不可用')) {
+                        const statusEl = document.getElementById('live2d-agent-status');
+                        if (statusEl) statusEl.textContent = checkbox.title;
+                    } else if (!checkbox.disabled) {
+                        toggleItem.style.background = 'rgba(79, 140, 255, 0.1)';
+                    }
                 });
                 toggleItem.addEventListener('mouseleave', () => {
                     toggleItem.style.background = 'transparent';
                 });
                 
-                // 点击切换（点击整个项目或指示器都可以切换）
+                // 点击切换（点击整个项目都可以切换）
                 toggleItem.addEventListener('click', (e) => {
-                    if (e.target !== checkbox) {
-                        checkbox.checked = !checkbox.checked;
-                        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                        updateStyle();  // 更新样式
-                    }
-                });
-                
-                // 点击指示器也可以切换
-                indicator.addEventListener('click', (e) => {
-                    e.stopPropagation();
+                    if (checkbox.disabled) return;
                     checkbox.checked = !checkbox.checked;
                     checkbox.dispatchEvent(new Event('change', { bubbles: true }));
                     updateStyle();
@@ -1728,8 +2039,8 @@ class Live2DManager {
             
             // 先添加 Focus 模式和主动搭话开关（在最上面）
             const settingsToggles = [
-                { id: 'focus-mode', label: '允许打断', storageKey: 'focusModeEnabled', inverted: true }, // inverted表示值与focusModeEnabled相反
-                { id: 'proactive-chat', label: '主动搭话', storageKey: 'proactiveChatEnabled' }
+                { id: 'focus-mode', label: window.t ? window.t('settings.toggles.allowInterrupt') : '允许打断', labelKey: 'settings.toggles.allowInterrupt', storageKey: 'focusModeEnabled', inverted: true }, // inverted表示值与focusModeEnabled相反
+                { id: 'proactive-chat', label: window.t ? window.t('settings.toggles.proactiveChat') : '主动搭话', labelKey: 'settings.toggles.proactiveChat', storageKey: 'proactiveChatEnabled' }
             ];
             
             settingsToggles.forEach(toggle => {
@@ -1738,7 +2049,7 @@ class Live2DManager {
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    padding: '6px 8px',
+                    padding: '8px 12px',  // 统一padding，与下方菜单项一致
                     cursor: 'pointer',
                     borderRadius: '6px',
                     transition: 'background 0.2s ease',
@@ -1766,35 +2077,65 @@ class Live2DManager {
                 // 创建自定义圆形指示器
                 const indicator = document.createElement('div');
                 Object.assign(indicator.style, {
-                    width: '16px',
-                    height: '16px',
+                    width: '20px',  // 稍微增大，与下方图标更协调
+                    height: '20px',
                     borderRadius: '50%',
                     border: '2px solid #ccc',
                     backgroundColor: 'transparent',
                     cursor: 'pointer',
                     flexShrink: '0',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
+                    position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
                 });
+                
+                // 创建对勾图标（初始隐藏）
+                const checkmark = document.createElement('div');
+                checkmark.innerHTML = '✓';
+                Object.assign(checkmark.style, {
+                    color: '#fff',
+                    fontSize: '13px',  // 稍微增大，与指示器大小更协调
+                    fontWeight: 'bold',
+                    lineHeight: '1',
+                    opacity: '0',
+                    transition: 'opacity 0.2s ease',
+                    pointerEvents: 'none',
+                    userSelect: 'none'
+                });
+                indicator.appendChild(checkmark);
                 
                 const label = document.createElement('label');
                 label.innerText = toggle.label;
                 label.htmlFor = `live2d-${toggle.id}`;
+                // 添加 data-i18n 属性以便自动更新
+                if (toggle.labelKey) {
+                    label.setAttribute('data-i18n', toggle.labelKey);
+                }
                 label.style.cursor = 'pointer';
                 label.style.userSelect = 'none';
                 label.style.fontSize = '13px';
-                label.style.flex = '1';
                 label.style.color = '#333';  // 文本始终为深灰色，不随选中状态改变
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.lineHeight = '1';
+                label.style.height = '20px';  // 与指示器高度一致，确保垂直居中
                 
                 // 根据 checkbox 状态更新指示器颜色（文本颜色保持不变）
                 const updateStyle = () => {
                     if (checkbox.checked) {
-                        // 选中状态：蓝色填充，蓝色边框
+                        // 选中状态：蓝色填充，蓝色边框，显示对勾，背景颜色突出
                         indicator.style.backgroundColor = '#44b7fe';
                         indicator.style.borderColor = '#44b7fe';
+                        checkmark.style.opacity = '1';
+                        toggleItem.style.background = 'rgba(68, 183, 254, 0.1)';  // 浅蓝色背景
                     } else {
-                        // 未选中状态：灰色边框，透明填充
+                        // 未选中状态：灰色边框，透明填充，隐藏对勾，无背景
                         indicator.style.backgroundColor = 'transparent';
                         indicator.style.borderColor = '#ccc';
+                        checkmark.style.opacity = '0';
+                        toggleItem.style.background = 'transparent';
                     }
                 };
                 
@@ -1807,13 +2148,19 @@ class Live2DManager {
                 popup.appendChild(toggleItem);
                 
                 toggleItem.addEventListener('mouseenter', () => {
-                    toggleItem.style.background = 'rgba(79, 140, 255, 0.1)';
+                    // 如果已选中，使用更深的背景色；如果未选中，使用浅色背景
+                    if (checkbox.checked) {
+                        toggleItem.style.background = 'rgba(68, 183, 254, 0.15)';
+                    } else {
+                        toggleItem.style.background = 'rgba(79, 140, 255, 0.1)';
+                    }
                 });
                 toggleItem.addEventListener('mouseleave', () => {
-                    toggleItem.style.background = 'transparent';
+                    // 恢复选中状态的背景色
+                    updateStyle();
                 });
                 
-                // 点击切换（优先通过 app.js 中的开关来触发，确保逻辑完整执行）
+                // 点击切换（直接更新全局状态并保存）
                 checkbox.addEventListener('change', (e) => {
                     e.stopPropagation();
                     const isChecked = checkbox.checked;
@@ -1823,32 +2170,30 @@ class Live2DManager {
                     
                     // 同步到 app.js 中的对应开关（这样会触发 app.js 的完整逻辑）
                     if (toggle.id === 'focus-mode') {
-                        // inverted: 允许打断的值需要取反后赋给 focusModeEnabled
+                        // inverted: "允许打断"的值需要取反后赋给 focusModeEnabled
+                        // 勾选"允许打断" = focusModeEnabled为false（允许打断）
+                        // 取消勾选"允许打断" = focusModeEnabled为true（focus模式，AI说话时静音麦克风）
                         const actualValue = toggle.inverted ? !isChecked : isChecked;
-                        const appCheckbox = document.getElementById('focus-mode-toggle-l2d');
-                        if (appCheckbox && appCheckbox.checked !== actualValue) {
-                            appCheckbox.checked = actualValue;
-                            appCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-                        } else if (!appCheckbox) {
-                            // 如果 app.js 的开关不存在，直接更新全局变量
-                            window.focusModeEnabled = actualValue;
-                            console.log(`允许打断已${isChecked ? '开启' : '关闭'}（focusModeEnabled=${actualValue}）`);
+                        window.focusModeEnabled = actualValue;
+                        
+                        // 保存到localStorage
+                        if (typeof window.saveXiao8Settings === 'function') {
+                            window.saveXiao8Settings();
                         }
                     } else if (toggle.id === 'proactive-chat') {
-                        const appCheckbox = document.getElementById('proactive-chat-toggle-l2d');
-                        if (appCheckbox && appCheckbox.checked !== isChecked) {
-                            appCheckbox.checked = isChecked;
-                            appCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-                        } else if (!appCheckbox) {
-                            // 如果 app.js 的开关不存在，直接执行功能
-                            window.proactiveChatEnabled = isChecked;
-                            if (isChecked && typeof window.resetProactiveChatBackoff === 'function') {
-                                window.resetProactiveChatBackoff();
-                            } else if (!isChecked && typeof window.stopProactiveChatSchedule === 'function') {
-                                window.stopProactiveChatSchedule();
-                            }
-                            console.log(`主动搭话已${isChecked ? '开启' : '关闭'}`);
+                        window.proactiveChatEnabled = isChecked;
+                        
+                        // 保存到localStorage
+                        if (typeof window.saveXiao8Settings === 'function') {
+                            window.saveXiao8Settings();
                         }
+                        
+                        if (isChecked && typeof window.resetProactiveChatBackoff === 'function') {
+                            window.resetProactiveChatBackoff();
+                        } else if (!isChecked && typeof window.stopProactiveChatSchedule === 'function') {
+                            window.stopProactiveChatSchedule();
+                        }
+                        console.log(`主动搭话已${isChecked ? '开启' : '关闭'}`);
                     }
                 });
                 
@@ -1870,85 +2215,158 @@ class Live2DManager {
                 });
             });
             
-            // 添加分隔线
-            const separator = document.createElement('div');
-            Object.assign(separator.style, {
-                height: '1px',
-                background: 'rgba(0,0,0,0.1)',
-                margin: '4px 0'
-            });
-            popup.appendChild(separator);
-            
-            // 然后添加导航菜单项
-            const settingsItems = [
-                { id: 'live2d-manage', label: 'Live2D设置', icon: '/static/icons/live2d_settings_icon.png', action: 'navigate', urlBase: '/l2d' },
-                { id: 'api-keys', label: 'API密钥', icon: '/static/icons/api_key_icon.png', action: 'navigate', url: '/api_key' },
-                { id: 'character', label: '角色管理', icon: '/static/icons/character_icon.png', action: 'navigate', url: '/chara_manager' },
-                { id: 'voice-clone', label: '声音克隆', icon: '/static/icons/voice_clone_icon.png', action: 'navigate', url: '/voice_clone' },
-                { id: 'memory', label: '记忆浏览', icon: '/static/icons/memory_icon.png', action: 'navigate', url: '/memory_browser' }
-            ];
-            
-            settingsItems.forEach(item => {
-                const menuItem = document.createElement('div');
-                Object.assign(menuItem.style, {
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    borderRadius: '6px',
-                    transition: 'background 0.2s ease',
-                    fontSize: '13px',
-                    whiteSpace: 'nowrap',
-                    color: '#333'  // 文本颜色为深灰色
-                });
-                
-                // 添加图标（如果有）
-                if (item.icon) {
-                    const iconImg = document.createElement('img');
-                    iconImg.src = item.icon;
-                    iconImg.alt = item.label;
-                    Object.assign(iconImg.style, {
-                        width: '24px',
-                        height: '24px',
-                        objectFit: 'contain',
-                        flexShrink: '0'
-                    });
-                    menuItem.appendChild(iconImg);
-                }
-                
-                // 添加文本
-                const labelText = document.createElement('span');
-                labelText.textContent = item.label;
-                menuItem.appendChild(labelText);
-                
-                menuItem.addEventListener('mouseenter', () => {
-                    menuItem.style.background = 'rgba(79, 140, 255, 0.1)';
-                });
-                menuItem.addEventListener('mouseleave', () => {
-                    menuItem.style.background = 'transparent';
-                });
-                
-                menuItem.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (item.action === 'navigate') {
-                        // 动态构建 URL（点击时才获取 lanlan_name）
-                        let finalUrl = item.url || item.urlBase;
-                        if (item.id === 'live2d-manage' && item.urlBase) {
-                            // 从 window.lanlan_config 动态获取 lanlan_name
-                            const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
-                            finalUrl = `${item.urlBase}?lanlan_name=${encodeURIComponent(lanlanName)}`;
-                            // Live2D设置页直接跳转
-                            window.location.href = finalUrl;
-                        } else {
-                            // 其他页面弹出新窗口
-                            window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
-                        }
-                    }
-                });
-                
-                popup.appendChild(menuItem);
-            });
+			// 手机仅保留两个开关；桌面端追加导航菜单
+			if (!isMobileWidth()) {
+				// 添加分隔线
+				const separator = document.createElement('div');
+				Object.assign(separator.style, {
+					height: '1px',
+					background: 'rgba(0,0,0,0.1)',
+					margin: '4px 0'
+				});
+				popup.appendChild(separator);
+				
+				// 然后添加导航菜单项
+				const settingsItems = [
+					{ id: 'live2d-manage', label: window.t ? window.t('settings.menu.live2dSettings') : 'Live2D设置', labelKey: 'settings.menu.live2dSettings', icon: '/static/icons/live2d_settings_icon.png', action: 'navigate', urlBase: '/l2d' },
+					{ id: 'api-keys', label: window.t ? window.t('settings.menu.apiKeys') : 'API密钥', labelKey: 'settings.menu.apiKeys', icon: '/static/icons/api_key_icon.png', action: 'navigate', url: '/api_key' },
+					{ id: 'character', label: window.t ? window.t('settings.menu.characterManage') : '角色管理', labelKey: 'settings.menu.characterManage', icon: '/static/icons/character_icon.png', action: 'navigate', url: '/chara_manager' },
+					{ id: 'voice-clone', label: window.t ? window.t('settings.menu.voiceClone') : '声音克隆', labelKey: 'settings.menu.voiceClone', icon: '/static/icons/voice_clone_icon.png', action: 'navigate', url: '/voice_clone' },
+					{ id: 'memory', label: window.t ? window.t('settings.menu.memoryBrowser') : '记忆浏览', labelKey: 'settings.menu.memoryBrowser', icon: '/static/icons/memory_icon.png', action: 'navigate', url: '/memory_browser' }
+				];
+				
+				settingsItems.forEach(item => {
+					const menuItem = document.createElement('div');
+					Object.assign(menuItem.style, {
+						display: 'flex',
+						alignItems: 'center',
+						gap: '8px',
+						padding: '8px 12px',
+						cursor: 'pointer',
+						borderRadius: '6px',
+						transition: 'background 0.2s ease',
+						fontSize: '13px',
+						whiteSpace: 'nowrap',
+						color: '#333'  // 文本颜色为深灰色
+					});
+					
+					// 添加图标（如果有）
+					if (item.icon) {
+						const iconImg = document.createElement('img');
+						iconImg.src = item.icon;
+						iconImg.alt = item.label;
+						Object.assign(iconImg.style, {
+							width: '24px',
+							height: '24px',
+							objectFit: 'contain',
+							flexShrink: '0'
+						});
+						menuItem.appendChild(iconImg);
+					}
+					
+					// 添加文本
+					const labelText = document.createElement('span');
+					labelText.textContent = item.label;
+					if (item.labelKey) {
+						labelText.setAttribute('data-i18n', item.labelKey);
+					}
+					Object.assign(labelText.style, {
+						display: 'flex',
+						alignItems: 'center',
+						lineHeight: '1',
+						height: '24px'  // 与图标高度一致，确保垂直居中
+					});
+					menuItem.appendChild(labelText);
+					
+					// 存储更新函数
+					if (item.labelKey) {
+						const updateLabelText = () => {
+							if (window.t) {
+								labelText.textContent = window.t(item.labelKey);
+								// 同时更新图标 alt 属性
+								if (item.icon && menuItem.querySelector('img')) {
+									menuItem.querySelector('img').alt = window.t(item.labelKey);
+								}
+							}
+						};
+						menuItem._updateLabelText = updateLabelText;
+					}
+					
+					menuItem.addEventListener('mouseenter', () => {
+						menuItem.style.background = 'rgba(79, 140, 255, 0.1)';
+					});
+					menuItem.addEventListener('mouseleave', () => {
+						menuItem.style.background = 'transparent';
+					});
+					
+					menuItem.addEventListener('click', (e) => {
+						e.stopPropagation();
+						if (item.action === 'navigate') {
+							// 动态构建 URL（点击时才获取 lanlan_name）
+							let finalUrl = item.url || item.urlBase;
+							if (item.id === 'live2d-manage' && item.urlBase) {
+								// 从 window.lanlan_config 动态获取 lanlan_name
+								const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+								finalUrl = `${item.urlBase}?lanlan_name=${encodeURIComponent(lanlanName)}`;
+								// Live2D设置页直接跳转
+								window.location.href = finalUrl;
+							} else if (item.id === 'voice-clone' && item.url) {
+								// 声音克隆页面也需要传递 lanlan_name
+								const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+								finalUrl = `${item.url}?lanlan_name=${encodeURIComponent(lanlanName)}`;
+								
+								// 检查是否已有该URL的窗口打开
+								if (this._openSettingsWindows[finalUrl]) {
+									const existingWindow = this._openSettingsWindows[finalUrl];
+									if (existingWindow && !existingWindow.closed) {
+										existingWindow.focus();
+										return;
+									} else {
+										delete this._openSettingsWindows[finalUrl];
+									}
+								}
+								
+								// 打开新窗口并保存引用
+								const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
+								if (newWindow) {
+									this._openSettingsWindows[finalUrl] = newWindow;
+								}
+							} else {
+								// 其他页面弹出新窗口，但检查是否已打开
+								// 检查是否已有该URL的窗口打开
+								if (this._openSettingsWindows[finalUrl]) {
+									const existingWindow = this._openSettingsWindows[finalUrl];
+									// 检查窗口是否仍然打开
+									if (existingWindow && !existingWindow.closed) {
+										// 聚焦到已存在的窗口
+										existingWindow.focus();
+										return;
+									} else {
+										// 窗口已关闭，清除引用
+										delete this._openSettingsWindows[finalUrl];
+									}
+								}
+								
+								// 打开新窗口并保存引用
+								const newWindow = window.open(finalUrl, '_blank', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no');
+								if (newWindow) {
+									this._openSettingsWindows[finalUrl] = newWindow;
+									
+									// 监听窗口关闭事件，清除引用
+									const checkClosed = setInterval(() => {
+										if (newWindow.closed) {
+											delete this._openSettingsWindows[finalUrl];
+											clearInterval(checkClosed);
+										}
+									}, 500);
+								}
+							}
+						}
+					});
+					
+					popup.appendChild(menuItem);
+				});
+			}
         }
 
         return popup;
@@ -1985,10 +2403,17 @@ class Live2DManager {
             popup.style.transform = 'translateX(-10px)';
             setTimeout(() => {
                 popup.style.display = 'none';
-                // 重置位置
+                // 重置位置和样式
                 popup.style.left = '100%';
                 popup.style.right = 'auto';
                 popup.style.top = '0';
+                popup.style.marginLeft = '8px';
+                popup.style.marginRight = '0';
+                // 重置高度限制，确保下次打开时状态一致
+                if (buttonId === 'settings' || buttonId === 'agent') {
+                    popup.style.maxHeight = '200px';
+                    popup.style.overflowY = 'auto';
+                }
             }, 200);
         } else {
             // 如果隐藏，则显示
@@ -1997,52 +2422,73 @@ class Live2DManager {
             popup.style.opacity = '0';
             popup.style.visibility = 'visible';
             
-            // 等待一帧让浏览器计算布局
-            setTimeout(() => {
-                const popupRect = popup.getBoundingClientRect();
-                const screenWidth = window.innerWidth;
-                const screenHeight = window.innerHeight;
-                const rightMargin = 20; // 距离屏幕右侧的安全边距
-                const bottomMargin = 20; // 距离屏幕底部的安全边距
-                
-                // 检查是否超出屏幕右侧
-                const popupRight = popupRect.right;
-                if (popupRight > screenWidth - rightMargin) {
-                    // 超出右边界，改为向左弹出
-                    // 获取按钮的实际宽度来计算正确的偏移
-                    const button = document.getElementById(`live2d-btn-${buttonId}`);
-                    const buttonWidth = button ? button.offsetWidth : 48;
-                    const gap = 8;
-                    
-                    // 让弹出框完全移到按钮左侧，不遮挡按钮
-                    popup.style.left = 'auto';
-                    popup.style.right = '0';
-                    popup.style.marginLeft = '0';
-                    popup.style.marginRight = `${buttonWidth + gap}px`;
-                    popup.style.transform = 'translateX(10px)'; // 反向动画
+            // 关键：在计算位置之前，先移除高度限制，确保获取真实尺寸
+            if (buttonId === 'settings' || buttonId === 'agent') {
+                popup.style.maxHeight = 'none';
+                popup.style.overflowY = 'visible';
+            }
+            
+            // 等待popup内的所有图片加载完成，确保尺寸准确
+            const images = popup.querySelectorAll('img');
+            const imageLoadPromises = Array.from(images).map(img => {
+                if (img.complete) {
+                    return Promise.resolve();
                 }
+                return new Promise(resolve => {
+                    img.onload = resolve;
+                    img.onerror = resolve; // 即使加载失败也继续
+                    // 超时保护：最多等待100ms
+                    setTimeout(resolve, 100);
+                });
+            });
+            
+            Promise.all(imageLoadPromises).then(() => {
+                // 强制触发reflow，确保布局完全更新
+                void popup.offsetHeight;
                 
-                // 检查是否超出屏幕底部（设置弹出框或其他较高的弹出框）
-                if (buttonId === 'settings' || buttonId === 'agent') {
-                    const popupBottom = popupRect.bottom;
-                    if (popupBottom > screenHeight - bottomMargin) {
-                        // 计算需要向上移动的距离
-                        const overflow = popupBottom - (screenHeight - bottomMargin);
-                        const currentTop = parseInt(popup.style.top) || 0;
-                        const newTop = currentTop - overflow;
-                        popup.style.top = `${newTop}px`;
+                // 再次使用RAF确保布局稳定
+                requestAnimationFrame(() => {
+                    const popupRect = popup.getBoundingClientRect();
+                    const screenWidth = window.innerWidth;
+                    const screenHeight = window.innerHeight;
+                    const rightMargin = 20; // 距离屏幕右侧的安全边距
+                    const bottomMargin = 60; // 距离屏幕底部的安全边距（考虑系统任务栏，Windows任务栏约40-48px）
+                    
+                    // 检查是否超出屏幕右侧
+                    const popupRight = popupRect.right;
+                    if (popupRight > screenWidth - rightMargin) {
+                        // 超出右边界，改为向左弹出
+                        // 获取按钮的实际宽度来计算正确的偏移
+                        const button = document.getElementById(`live2d-btn-${buttonId}`);
+                        const buttonWidth = button ? button.offsetWidth : 48;
+                        const gap = 8;
+                        
+                        // 让弹出框完全移到按钮左侧，不遮挡按钮
+                        popup.style.left = 'auto';
+                        popup.style.right = '0';
+                        popup.style.marginLeft = '0';
+                        popup.style.marginRight = `${buttonWidth + gap}px`;
+                        popup.style.transform = 'translateX(10px)'; // 反向动画
                     }
                     
-                    // 取消maxHeight限制，让内容完整显示
-                    popup.style.maxHeight = 'none';
-                    popup.style.overflowY = 'visible';
-                }
-                
-                // 显示弹出框
-                popup.style.visibility = 'visible';
-                popup.style.opacity = '1';
-                popup.style.transform = 'translateX(0)';
-            }, 10);
+                    // 检查是否超出屏幕底部（设置弹出框或其他较高的弹出框）
+                    if (buttonId === 'settings' || buttonId === 'agent') {
+                        const popupBottom = popupRect.bottom;
+                        if (popupBottom > screenHeight - bottomMargin) {
+                            // 计算需要向上移动的距离
+                            const overflow = popupBottom - (screenHeight - bottomMargin);
+                            const currentTop = parseInt(popup.style.top) || 0;
+                            const newTop = currentTop - overflow;
+                            popup.style.top = `${newTop}px`;
+                        }
+                    }
+                    
+                    // 显示弹出框
+                    popup.style.visibility = 'visible';
+                    popup.style.opacity = '1';
+                    popup.style.transform = 'translateX(0)';
+                });
+            });
             
             // 设置、agent、麦克风弹出框不自动隐藏，其他的1秒后隐藏
             if (buttonId !== 'settings' && buttonId !== 'agent' && buttonId !== 'mic') {
@@ -2080,13 +2526,26 @@ class Live2DManager {
                 return;
             }
             
-            // 如果已经点击了"请她离开"，永远不显示浮动按钮和锁按钮
+            // 如果已经点击了"请她离开"，不显示锁按钮，但保持显示"请她回来"按钮
             if (this._goodbyeClicked) {
-                if (floatingButtons) {
-                    floatingButtons.style.setProperty('display', 'none', 'important');
-                }
                 if (lockIcon) {
                     lockIcon.style.setProperty('display', 'none', 'important');
+                }
+                // 保持浮动按钮容器显示，但只显示"请她回来"按钮
+                if (floatingButtons) {
+                    floatingButtons.style.display = 'flex';
+                    // 隐藏所有其他按钮，只显示"请她回来"按钮
+                    Object.keys(this._floatingButtons).forEach(btnId => {
+                        if (btnId !== 'return') {
+                            const btn = this._floatingButtons[btnId].button;
+                            if (btn) btn.style.display = 'none';
+                        }
+                    });
+                    // 确保"请她回来"按钮显示
+                    const returnBtn = this._floatingButtons['return'];
+                    if (returnBtn && returnBtn.button) {
+                        returnBtn.button.style.display = 'flex';
+                    }
                 }
                 return;
             }
@@ -2272,6 +2731,7 @@ Live2DManager.prototype.applyPersistentExpressionsNative = async function() {
 // 创建全局 Live2D 管理器实例
 window.Live2DManager = Live2DManager;
 window.live2dManager = new Live2DManager();
+
 
 // 兼容性：保持原有的全局变量和函数
 window.LanLan1 = window.LanLan1 || {};

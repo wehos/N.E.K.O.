@@ -1,7 +1,6 @@
 # -- coding: utf-8 --
 
 import asyncio
-from re import T
 import websockets
 import json
 import base64
@@ -74,13 +73,15 @@ class OmniRealtimeClient:
         on_connection_error: Optional[Callable[[str], Awaitable[None]]] = None,
         on_response_done: Optional[Callable[[], Awaitable[None]]] = None,
         on_silence_timeout: Optional[Callable[[], Awaitable[None]]] = None,
-        extra_event_handlers: Optional[Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]]] = None
+        extra_event_handlers: Optional[Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]]] = None,
+        api_type: Optional[str] = None
     ):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
         self.voice = voice
         self.ws = None
+        self.instructions = None
         self.on_text_delta = on_text_delta
         self.on_audio_delta = on_audio_delta
         self.on_new_message = on_new_message
@@ -110,13 +111,22 @@ class OmniRealtimeClient:
         self._image_description = "[用户的实时屏幕截图或相机画面正在分析中。你先不要瞎编内容，可以请用户稍等片刻。在此期间不要用搜索功能应付。等收到画面分析结果后再描述画面。]"
         
         # Silence detection for auto-closing inactive sessions
+        # 只在 GLM 和 free API 时启用90秒静默超时，Qwen 和 Step 放行
         self._last_speech_time = None
+        self._api_type = api_type or ""
+        # 只在 GLM 和 free 时启用静默超时
+        self._enable_silence_timeout = self._api_type.lower() in ['glm', 'free']
         self._silence_timeout_seconds = 90  # 90秒无语音输入则自动关闭
         self._silence_check_task = None
         self._silence_timeout_triggered = False
 
     async def _check_silence_timeout(self):
         """定期检查是否超过静默超时时间，如果是则触发超时回调"""
+        # 如果未启用静默超时（Qwen 或 Step），直接返回
+        if not self._enable_silence_timeout:
+            logger.debug(f"静默超时检测已禁用（API类型: {self._api_type}）")
+            return
+        
         try:
             while self.ws:
                 # 检查websocket是否还有效（直接访问并捕获异常）
@@ -130,7 +140,7 @@ class OmniRealtimeClient:
                 
                 if self._silence_timeout_triggered:
                     continue
-                    
+                
                 if self._last_speech_time is None:
                     # 还没有检测到任何语音，从现在开始计时
                     self._last_speech_time = time.time()
@@ -156,12 +166,16 @@ class OmniRealtimeClient:
         } 
         self.ws = await websockets.connect(url, additional_headers=headers)
         
-        # 启动静默检测任务
+        # 启动静默检测任务（只在启用时）
         self._last_speech_time = time.time()
         self._silence_timeout_triggered = False
         if self._silence_check_task:
             self._silence_check_task.cancel()
-        self._silence_check_task = asyncio.create_task(self._check_silence_timeout())
+        # 只在启用静默超时时启动检测任务
+        if self._enable_silence_timeout:
+            self._silence_check_task = asyncio.create_task(self._check_silence_timeout())
+        else:
+            logger.info(f"静默超时检测已禁用（API类型: {self._api_type}），不会自动关闭会话")
 
         # Set up default session configuration
         if self.turn_detection_mode == TurnDetectionMode.MANUAL:
@@ -266,6 +280,7 @@ class OmniRealtimeClient:
                 })
             else:
                 raise ValueError(f"Invalid model: {self.model}")
+            self.instructions = instructions
         else:
             raise ValueError(f"Invalid turn detection mode: {self.turn_detection_mode}")
 
@@ -425,18 +440,36 @@ class OmniRealtimeClient:
             raise e
 
     async def create_response(self, instructions: str, skipped: bool = False) -> None:
-        """Request a response from the API. Needed when using manual mode."""
+        """Request a response from the API. First adds message to conversation, then creates response."""
         if skipped == True:
             self._skip_until_next_response = True
-        event = {
-            "type": "response.create",
-            "response": {
-                "instructions": instructions,
-                "modalities": self._modalities
+
+        if "qwen" in self.model:
+            await self.update_session({"instructions": self.instructions + '\n' + instructions})
+
+            logger.info(f"Creating response with instructions override")
+            await self.send_event({"type": "response.create"})
+        else:
+            # 先通过 conversation.item.create 添加系统消息（增量）
+            item_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": instructions
+                        }
+                    ]
+                }
             }
-        }
-        logger.info(f"Creating response: {event}")
-        await self.send_event(event)
+            logger.info(f"Adding conversation item: {item_event}")
+            await self.send_event(item_event)
+            
+            # 然后调用 response.create，不带 instructions（避免替换 session instructions）
+            logger.info(f"Creating response without instructions override")
+            await self.send_event({"type": "response.create"})
 
     async def cancel_response(self) -> None:
         """Cancel the current response."""

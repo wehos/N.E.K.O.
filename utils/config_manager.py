@@ -12,16 +12,17 @@ from copy import deepcopy
 from pathlib import Path
 
 from config import (
+    APP_NAME,
     CONFIG_FILES,
-    DEFAULT_MASTER_TEMPLATE,
-    DEFAULT_LANLAN_TEMPLATE,
     DEFAULT_CHARACTERS_CONFIG,
     DEFAULT_CONFIG_DATA,
-    CORE_API_PROFILES,
-    ASSIST_API_PROFILES,
-    ASSIST_API_KEY_FIELDS,
 )
 from config.prompts_chara import lanlan_prompt
+from utils.api_config_loader import (
+    get_core_api_profiles,
+    get_assist_api_profiles,
+    get_assist_api_key_fields,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -30,16 +31,16 @@ logger = logging.getLogger(__name__)
 class ConfigManager:
     """配置文件管理器"""
     
-    def __init__(self, app_name="Xiao8"):
+    def __init__(self, app_name=None):
         """
         初始化配置管理器
         
         Args:
-            app_name: 应用名称
+            app_name: 应用名称，默认使用配置中的 APP_NAME
         """
-        self.app_name = app_name
+        self.app_name = app_name if app_name is not None else APP_NAME
         self.docs_dir = self._get_documents_directory()
-        self.app_docs_dir = self.docs_dir / app_name
+        self.app_docs_dir = self.docs_dir / self.app_name
         self.config_dir = self.app_docs_dir / "config"
         self.memory_dir = self.app_docs_dir / "memory"
         self.live2d_dir = self.app_docs_dir / "live2d"
@@ -48,6 +49,8 @@ class ConfigManager:
     
     def _get_documents_directory(self):
         """获取用户文档目录（使用系统API）"""
+        candidates = []  # 候选路径列表
+        
         if sys.platform == "win32":
             # Windows: 使用系统API获取真正的"我的文档"路径
             try:
@@ -60,10 +63,21 @@ class ConfigManager:
                 
                 buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
                 windll.shell32.SHGetFolderPathW(None, CSIDL_PERSONAL, None, SHGFP_TYPE_CURRENT, buf)
-                docs_dir = Path(buf.value)
+                api_path = Path(buf.value)
+                print(f"[ConfigManager] API returned path: {api_path}", file=sys.stderr)
+                candidates.append(api_path)
                 
-                if docs_dir.exists():
-                    return docs_dir
+                # 如果API返回的路径看起来不对（包含特殊字符但不存在），尝试查找同盘符下可能的替代路径
+                if not api_path.exists() and api_path.drive:
+                    # 获取盘符
+                    drive = api_path.drive
+                    # 尝试在同一盘符下查找常见的文档文件夹名
+                    possible_names = ["文档", "Documents", "My Documents"]
+                    for name in possible_names:
+                        alt_path = Path(drive) / name
+                        if alt_path.exists():
+                            print(f"[ConfigManager] Found alternative path on same drive: {alt_path}", file=sys.stderr)
+                            candidates.append(alt_path)
             except Exception as e:
                 print(f"Warning: Failed to get Documents path via API: {e}", file=sys.stderr)
             
@@ -74,33 +88,99 @@ class ConfigManager:
                     winreg.HKEY_CURRENT_USER,
                     r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
                 )
-                docs_dir = Path(winreg.QueryValueEx(key, "Personal")[0])
+                reg_path_str = winreg.QueryValueEx(key, "Personal")[0]
                 winreg.CloseKey(key)
                 
                 # 展开环境变量
-                docs_dir = Path(os.path.expandvars(str(docs_dir)))
-                if docs_dir.exists():
-                    return docs_dir
+                reg_path = Path(os.path.expandvars(reg_path_str))
+                print(f"[ConfigManager] Registry returned path: {reg_path}", file=sys.stderr)
+                
+                # 如果注册表路径不存在，尝试在同一盘符下查找
+                if not reg_path.exists() and reg_path.drive:
+                    drive = reg_path.drive
+                    # 列出盘符下的所有文件夹，查找可能的文档文件夹
+                    try:
+                        drive_path = Path(drive + "\\")
+                        if drive_path.exists():
+                            for item in drive_path.iterdir():
+                                if item.is_dir() and item.name.lower() in ["documents", "文档", "my documents"]:
+                                    print(f"[ConfigManager] Found documents folder on drive: {item}", file=sys.stderr)
+                                    candidates.append(item)
+                    except Exception:
+                        pass
+                
+                candidates.append(reg_path)
             except Exception as e:
                 print(f"Warning: Failed to get Documents path from registry: {e}", file=sys.stderr)
             
-            # 最后的降级：使用默认路径
-            docs_dir = Path.home() / "Documents"
-            if not docs_dir.exists():
-                docs_dir = Path.home() / "文档"
+            # 添加默认路径候选
+            candidates.append(Path.home() / "Documents")
+            candidates.append(Path.home() / "文档")
+            
+            # 如果都不行，使用exe所在目录（打包后）或当前目录（开发时）
+            if getattr(sys, 'frozen', False):
+                candidates.append(Path(sys.executable).parent)
+            else:
+                candidates.append(Path.cwd())
         
         elif sys.platform == "darwin":
             # macOS: 使用标准路径
-            docs_dir = Path.home() / "Documents"
+            candidates.append(Path.home() / "Documents")
+            candidates.append(Path.cwd())
         else:
             # Linux: 尝试使用XDG
             xdg_docs = os.getenv('XDG_DOCUMENTS_DIR')
             if xdg_docs:
-                docs_dir = Path(xdg_docs)
-            else:
-                docs_dir = Path.home() / "Documents"
+                candidates.append(Path(xdg_docs))
+            candidates.append(Path.home() / "Documents")
+            candidates.append(Path.cwd())
         
-        return docs_dir
+        # 遍历候选路径，找到第一个真正可访问且可写的路径
+        for docs_dir in candidates:
+            try:
+                # 检查路径是否存在且可访问
+                if docs_dir.exists() and os.access(str(docs_dir), os.R_OK | os.W_OK):
+                    # 尝试在该目录创建测试文件，确保真的可写
+                    test_path = docs_dir / ".test_xiao8_write"
+                    try:
+                        test_path.touch()
+                        test_path.unlink()
+                        print(f"[ConfigManager] ✓ Using documents directory: {docs_dir}", file=sys.stderr)
+                        return docs_dir
+                    except Exception as e:
+                        print(f"[ConfigManager] Path exists but not writable: {docs_dir} - {e}", file=sys.stderr)
+                        continue
+                
+                # 如果路径不存在，尝试创建（测试是否可写）
+                if not docs_dir.exists():
+                    # 分步创建父目录
+                    dirs_to_create = []
+                    current = docs_dir
+                    while current and not current.exists():
+                        dirs_to_create.append(current)
+                        current = current.parent
+                        if current == current.parent:  # 到达根目录
+                            break
+                    
+                    # 从最顶层开始创建
+                    for dir_path in reversed(dirs_to_create):
+                        if not dir_path.exists():
+                            dir_path.mkdir(exist_ok=True)
+                    
+                    # 测试可写性
+                    test_path = docs_dir / ".test_xiao8_write"
+                    test_path.touch()
+                    test_path.unlink()
+                    print(f"[ConfigManager] ✓ Using documents directory (created): {docs_dir}", file=sys.stderr)
+                    return docs_dir
+            except Exception as e:
+                print(f"[ConfigManager] Failed to use path {docs_dir}: {e}", file=sys.stderr)
+                continue
+        
+        # 如果所有候选都失败，返回当前目录
+        fallback = Path.cwd()
+        print(f"[ConfigManager] ⚠ All document directories failed, using fallback: {fallback}", file=sys.stderr)
+        return fallback
     
     def _get_project_config_directory(self):
         """获取项目的config目录"""
@@ -138,10 +218,50 @@ class ConfigManager:
         
         return app_dir / "memory" / "store"
     
+    def _ensure_app_docs_directory(self):
+        """确保应用文档目录存在（Xiao8目录本身）"""
+        try:
+            # 先确保父目录（docs_dir）存在
+            if not self.docs_dir.exists():
+                print(f"Warning: Documents directory does not exist: {self.docs_dir}", file=sys.stderr)
+                print(f"Warning: Attempting to create documents directory...", file=sys.stderr)
+                try:
+                    # 尝试创建父目录（可能需要创建多级）
+                    dirs_to_create = []
+                    current = self.docs_dir
+                    while current and not current.exists():
+                        dirs_to_create.append(current)
+                        current = current.parent
+                        # 防止无限循环，到达根目录就停止
+                        if current == current.parent:
+                            break
+                    
+                    # 从最顶层开始创建目录
+                    for dir_path in reversed(dirs_to_create):
+                        if not dir_path.exists():
+                            print(f"Creating directory: {dir_path}", file=sys.stderr)
+                            dir_path.mkdir(exist_ok=True)
+                except Exception as e2:
+                    print(f"Warning: Failed to create documents directory: {e2}", file=sys.stderr)
+                    return False
+            
+            # 创建应用目录
+            if not self.app_docs_dir.exists():
+                print(f"Creating app directory: {self.app_docs_dir}", file=sys.stderr)
+                self.app_docs_dir.mkdir(exist_ok=True)
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to create app directory {self.app_docs_dir}: {e}", file=sys.stderr)
+            return False
+    
     def ensure_config_directory(self):
         """确保我的文档下的config目录存在"""
         try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
+            # 先确保app_docs_dir存在
+            if not self._ensure_app_docs_directory():
+                return False
+            
+            self.config_dir.mkdir(exist_ok=True)
             return True
         except Exception as e:
             print(f"Warning: Failed to create config directory: {e}", file=sys.stderr)
@@ -150,7 +270,11 @@ class ConfigManager:
     def ensure_memory_directory(self):
         """确保我的文档下的memory目录存在"""
         try:
-            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            # 先确保app_docs_dir存在
+            if not self._ensure_app_docs_directory():
+                return False
+            
+            self.memory_dir.mkdir(exist_ok=True)
             return True
         except Exception as e:
             print(f"Warning: Failed to create memory directory: {e}", file=sys.stderr)
@@ -159,7 +283,11 @@ class ConfigManager:
     def ensure_live2d_directory(self):
         """确保我的文档下的live2d目录存在"""
         try:
-            self.live2d_dir.mkdir(parents=True, exist_ok=True)
+            # 先确保app_docs_dir存在
+            if not self._ensure_app_docs_directory():
+                return False
+            
+            self.live2d_dir.mkdir(exist_ok=True)
             return True
         except Exception as e:
             print(f"Warning: Failed to create live2d directory: {e}", file=sys.stderr)
@@ -170,7 +298,7 @@ class ConfigManager:
         获取配置文件路径
         
         优先级：
-        1. 我的文档/Xiao8/config/
+        1. 我的文档/{APP_NAME}/config/
         2. 项目目录/config/
         
         Args:
@@ -298,7 +426,8 @@ class ConfigManager:
         if character_json_path is None:
             character_json_path = str(self.get_config_path('characters.json'))
 
-        Path(character_json_path).parent.mkdir(parents=True, exist_ok=True)
+        # 确保config目录存在
+        self.ensure_config_directory()
 
         with open(character_json_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -439,18 +568,39 @@ class ConfigManager:
 
     def get_core_config(self):
         """动态读取核心配置"""
-        from config.api import (
-            CORE_API_KEY as DEFAULT_CORE_API_KEY,
-            AUDIO_API_KEY as DEFAULT_AUDIO_API_KEY,
-            OPENROUTER_API_KEY as DEFAULT_OPENROUTER_API_KEY,
-            MCP_ROUTER_API_KEY as DEFAULT_MCP_ROUTER_API_KEY,
-            CORE_URL as DEFAULT_CORE_URL,
-            CORE_MODEL as DEFAULT_CORE_MODEL,
-            OPENROUTER_URL as DEFAULT_OPENROUTER_URL,
-            SUMMARY_MODEL as DEFAULT_SUMMARY_MODEL,
-            CORRECTION_MODEL as DEFAULT_CORRECTION_MODEL,
-            EMOTION_MODEL as DEFAULT_EMOTION_MODEL,
-            VISION_MODEL as DEFAULT_VISION_MODEL,
+        # 从 config 模块导入所有默认配置值
+        from config import (
+            DEFAULT_CORE_API_KEY,
+            DEFAULT_AUDIO_API_KEY,
+            DEFAULT_OPENROUTER_API_KEY,
+            DEFAULT_MCP_ROUTER_API_KEY,
+            DEFAULT_CORE_URL,
+            DEFAULT_CORE_MODEL,
+            DEFAULT_OPENROUTER_URL,
+            DEFAULT_SUMMARY_MODEL,
+            DEFAULT_CORRECTION_MODEL,
+            DEFAULT_EMOTION_MODEL,
+            DEFAULT_VISION_MODEL,
+            DEFAULT_OMNI_MODEL,
+            DEFAULT_TTS_MODEL,
+            DEFAULT_SUMMARY_MODEL_PROVIDER,
+            DEFAULT_SUMMARY_MODEL_URL,
+            DEFAULT_SUMMARY_MODEL_API_KEY,
+            DEFAULT_CORRECTION_MODEL_PROVIDER,
+            DEFAULT_CORRECTION_MODEL_URL,
+            DEFAULT_CORRECTION_MODEL_API_KEY,
+            DEFAULT_EMOTION_MODEL_PROVIDER,
+            DEFAULT_EMOTION_MODEL_URL,
+            DEFAULT_EMOTION_MODEL_API_KEY,
+            DEFAULT_VISION_MODEL_PROVIDER,
+            DEFAULT_VISION_MODEL_URL,
+            DEFAULT_VISION_MODEL_API_KEY,
+            DEFAULT_OMNI_MODEL_PROVIDER,
+            DEFAULT_OMNI_MODEL_URL,
+            DEFAULT_OMNI_MODEL_API_KEY,
+            DEFAULT_TTS_MODEL_PROVIDER,
+            DEFAULT_TTS_MODEL_URL,
+            DEFAULT_TTS_MODEL_API_KEY,
         )
 
         config = {
@@ -478,6 +628,26 @@ class ConfigManager:
             'COMPUTER_USE_GROUND_API_KEY': '',
             'IS_FREE_VERSION': False,
             'VISION_MODEL': DEFAULT_VISION_MODEL,
+            'OMNI_MODEL': DEFAULT_OMNI_MODEL,
+            'TTS_MODEL': DEFAULT_TTS_MODEL,
+            'SUMMARY_MODEL_PROVIDER': DEFAULT_SUMMARY_MODEL_PROVIDER,
+            'SUMMARY_MODEL_URL': DEFAULT_SUMMARY_MODEL_URL,
+            'SUMMARY_MODEL_API_KEY': DEFAULT_SUMMARY_MODEL_API_KEY,
+            'CORRECTION_MODEL_PROVIDER': DEFAULT_CORRECTION_MODEL_PROVIDER,
+            'CORRECTION_MODEL_URL': DEFAULT_CORRECTION_MODEL_URL,
+            'CORRECTION_MODEL_API_KEY': DEFAULT_CORRECTION_MODEL_API_KEY,
+            'EMOTION_MODEL_PROVIDER': DEFAULT_EMOTION_MODEL_PROVIDER,
+            'EMOTION_MODEL_URL': DEFAULT_EMOTION_MODEL_URL,
+            'EMOTION_MODEL_API_KEY': DEFAULT_EMOTION_MODEL_API_KEY,
+            'VISION_MODEL_PROVIDER': DEFAULT_VISION_MODEL_PROVIDER,
+            'VISION_MODEL_URL': DEFAULT_VISION_MODEL_URL,
+            'VISION_MODEL_API_KEY': DEFAULT_VISION_MODEL_API_KEY,
+            'OMNI_MODEL_PROVIDER': DEFAULT_OMNI_MODEL_PROVIDER,
+            'OMNI_MODEL_URL': DEFAULT_OMNI_MODEL_URL,
+            'OMNI_MODEL_API_KEY': DEFAULT_OMNI_MODEL_API_KEY,
+            'TTS_MODEL_PROVIDER': DEFAULT_TTS_MODEL_PROVIDER,
+            'TTS_MODEL_URL': DEFAULT_TTS_MODEL_URL,
+            'TTS_MODEL_API_KEY': DEFAULT_TTS_MODEL_API_KEY,
         }
 
         core_cfg = deepcopy(DEFAULT_CONFIG_DATA['core_config.json'])
@@ -513,10 +683,14 @@ class ConfigManager:
 
         config['COMPUTER_USE_MODEL_API_KEY'] = config['COMPUTER_USE_GROUND_API_KEY'] = config['ASSIST_API_KEY_GLM']
 
+        core_api_profiles = get_core_api_profiles()
+        assist_api_profiles = get_assist_api_profiles()
+        assist_api_key_fields = get_assist_api_key_fields()
+
         # Core API profile
         core_api_value = core_cfg.get('coreApi') or config['CORE_API_TYPE']
         config['CORE_API_TYPE'] = core_api_value
-        core_profile = CORE_API_PROFILES.get(core_api_value)
+        core_profile = core_api_profiles.get(core_api_value)
         if core_profile:
             config.update(core_profile)
 
@@ -529,17 +703,17 @@ class ConfigManager:
 
         config['assistApi'] = assist_api_value
 
-        assist_profile = ASSIST_API_PROFILES.get(assist_api_value)
+        assist_profile = assist_api_profiles.get(assist_api_value)
         if not assist_profile and assist_api_value != 'qwen':
             logger.warning("未知的 assistApi '%s'，回退到 qwen。", assist_api_value)
             assist_api_value = 'qwen'
             config['assistApi'] = assist_api_value
-            assist_profile = ASSIST_API_PROFILES.get(assist_api_value)
+            assist_profile = assist_api_profiles.get(assist_api_value)
 
         if assist_profile:
             config.update(assist_profile)
 
-        key_field = ASSIST_API_KEY_FIELDS.get(assist_api_value)
+        key_field = assist_api_key_fields.get(assist_api_value)
         if key_field:
             derived_key = config.get(key_field, '')
             if derived_key:
@@ -595,6 +769,7 @@ class ConfigManager:
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()  # 强制刷新缓冲区
         except Exception as e:
             print(f"Error saving {filename}: {e}", file=sys.stderr)
             raise
@@ -604,7 +779,7 @@ class ConfigManager:
         获取记忆文件路径
         
         优先级：
-        1. 我的文档/Xiao8/memory/
+        1. 我的文档/{APP_NAME}/memory/
         2. 项目目录/memory/store/
         
         Args:
@@ -647,8 +822,8 @@ class ConfigManager:
 _config_manager = None
 
 
-def get_config_manager(app_name="Xiao8"):
-    """获取配置管理器单例"""
+def get_config_manager(app_name=None):
+    """获取配置管理器单例，默认使用配置中的 APP_NAME"""
     global _config_manager
     if _config_manager is None:
         _config_manager = ConfigManager(app_name)
