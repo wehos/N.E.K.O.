@@ -1740,6 +1740,12 @@ function initTooltips() {
 
 // 页面初始化函数 - 先加载配置再显示UI
 async function initializePage() {
+    // 防止重复初始化
+    if (window.apiKeySettingsInitialized) {
+        console.log('API Key设置页面已初始化，跳过重复执行');
+        return;
+    }
+    
     try {
         // 显示加载遮罩（半透明覆盖在原有UI上）
         const loadingOverlay = document.getElementById('loading-overlay');
@@ -1841,6 +1847,9 @@ async function initializePage() {
         }
         
         console.log('API Key设置页面初始化完成');
+        
+        // 标记页面已初始化完成，防止重复执行
+        window.apiKeySettingsInitialized = true;
         
     } catch (error) {
         console.error('页面初始化失败:', error);
