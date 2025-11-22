@@ -1382,8 +1382,10 @@ function init_app(){
 
             // 自动将截图发送到后端保存到本地（APP_NAME\Pictures）
             try {
+                // 使用立即执行函数表达式(IIFE)处理异步操作，避免阻塞主线程
                 (async () => {
                     try {
+                        // 向后端API发送POST请求保存截图
                         const resp = await fetch('/api/save_screenshot', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -1392,10 +1394,12 @@ function init_app(){
 
                         let parsed = null;
                         const status = resp.status;
+                        
+                        // 尝试解析响应为JSON格式
                         try {
                             parsed = await resp.json();
                         } catch (e) {
-                            // 无法解析为 JSON，尝试获取文本
+                            // JSON解析失败时，尝试获取原始文本响应
                             const text = await resp.text();
                             console.warn('save_screenshot: response not json, text:', text);
                             parsed = { __raw_text: text };
@@ -1403,20 +1407,31 @@ function init_app(){
 
                         console.log('save_screenshot response status:', status, 'body:', parsed);
 
+                        // 检查响应是否成功
                         if (resp.ok && parsed && parsed.success) {
                             const path = parsed.path || '';
+                            
+                            // 获取成功保存的提示文本
                             const savedText = window.t ? window.t('app.screenshotSaved', { path }) : `Screenshot saved: ${path}`;
+                            // 获取7天删除提示文本
                             const deleteHint = window.t ? window.t('app.willDeleteIn7days') : 'The image will be deleted in 7 days';
+                            // 组合提示消息
                             const msg = deleteHint ? `${savedText}, ${deleteHint}` : savedText;
+                            
+                            // 显示成功提示消息，持续6秒
                             showStatusToast(msg, 6000);
                         } else {
-                            // 尝试从 parsed 中提取 error 字段，否则使用状态码或原始文本
+                            // 处理保存失败的情况
+                            // 尝试从响应中提取错误信息，优先级：error字段 > detail字段 > 原始文本 > HTTP状态码
                             const errText = (parsed && (parsed.error || parsed.detail || parsed.__raw_text)) || `HTTP ${status}`;
                             const msg = window.t ? window.t('app.screenshotSaveFailed', { error: errText }) : `截图保存失败: ${errText}`;
+                            
+                            // 显示错误提示消息，持续5秒
                             showStatusToast(msg, 5000);
                             console.error('save_screenshot failed:', { status, parsed });
                         }
                     } catch (err) {
+                        // 处理网络请求异常或其他未知错误
                         const errText = err?.message || String(err);
                         const msg = window.t ? window.t('app.screenshotSaveFailed', { error: errText }) : `截图保存失败: ${errText}`;
                         showStatusToast(msg, 5000);
@@ -1424,6 +1439,7 @@ function init_app(){
                     }
                 })();
             } catch (e) {
+                // 捕获外层异常（主要是IIFE本身的异常）
                 console.error('Error while sending screenshot to server (outer):', e);
             }
             
@@ -1454,19 +1470,23 @@ function init_app(){
         }
     });
     
-    // 添加截图到列表
+    /**
+     * 将截图添加到待发送列表中
+     * @param {string} dataUrl - 截图的base64数据URL
+     */
     function addScreenshotToList(dataUrl) {
-        screenshotCounter++;
+        screenshotCounter++; // 递增截图计数器
         
         // 创建截图项容器
         const item = document.createElement('div');
         item.className = 'screenshot-item';
-        item.dataset.index = screenshotCounter;
+        item.dataset.index = screenshotCounter; // 存储索引用于后续引用
         
-        // 创建缩略图
+        // 创建缩略图元素
         const img = document.createElement('img');
         img.className = 'screenshot-thumbnail';
         img.src = dataUrl;
+        // 设置alt和title文本，支持多语言
         img.alt = window.t ? window.t('chat.screenshotAlt', {index: screenshotCounter}) : `截图 ${screenshotCounter}`;
         img.title = window.t ? window.t('chat.screenshotTitle', {index: screenshotCounter}) : `点击查看截图 ${screenshotCounter}`;
         
@@ -1480,8 +1500,9 @@ function init_app(){
         removeBtn.className = 'screenshot-remove';
         removeBtn.innerHTML = '×';
         removeBtn.title = window.t ? window.t('chat.removeScreenshot') : '移除此截图';
+        // 点击删除按钮时，从列表中移除该项目
         removeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
+            e.stopPropagation(); // 阻止事件冒泡
             removeScreenshotFromList(item);
         });
         
@@ -1490,56 +1511,69 @@ function init_app(){
         indexLabel.className = 'screenshot-index';
         indexLabel.textContent = `#${screenshotCounter}`;
         
-        // 组装元素
+        // 组装截图项：将缩略图、删除按钮和索引标签添加到容器中
         item.appendChild(img);
         item.appendChild(removeBtn);
         item.appendChild(indexLabel);
         
-        // 添加到列表
+        // 将截图项添加到截图列表容器中
         screenshotsList.appendChild(item);
         
-        // 更新计数和显示容器
+        // 更新截图计数器和显示相关UI
         updateScreenshotCount();
+        // 显示截图缩略图容器
         screenshotThumbnailContainer.classList.add('show');
         
-        // 自动滚动到最新的截图
+        // 自动滚动到最新的截图位置
         setTimeout(() => {
             screenshotsList.scrollLeft = screenshotsList.scrollWidth;
         }, 100);
     }
     
-    // 从列表中移除截图
+    /**
+     * 从截图列表中移除指定的截图项
+     * @param {HTMLElement} item - 要移除的截图项DOM元素
+     */
     function removeScreenshotFromList(item) {
+        // 添加滑出动画效果，持续300毫秒
         item.style.animation = 'slideOut 0.3s ease';
+        
+        // 等待动画完成后移除元素
         setTimeout(() => {
-            item.remove();
-            updateScreenshotCount();
+            item.remove(); // 从DOM中移除元素
+            updateScreenshotCount(); // 更新截图计数
             
-            // 如果没有截图了，隐藏容器
+            // 如果没有截图了，隐藏缩略图容器
             if (screenshotsList.children.length === 0) {
                 screenshotThumbnailContainer.classList.remove('show');
             }
         }, 300);
     }
     
-    // 更新截图计数
+    /**
+     * 更新截图计数显示
+     * 获取当前截图列表中的元素数量，并更新到UI显示
+     */
     function updateScreenshotCount() {
-        const count = screenshotsList.children.length;
-        screenshotCount.textContent = count;
+        const count = screenshotsList.children.length; // 获取当前截图数量
+        screenshotCount.textContent = count; // 更新UI中的计数显示
     }
     
-    // 清空所有截图
+    // 清空所有截图按钮点击事件
     clearAllScreenshots.addEventListener('click', async () => {
+        // 如果当前没有截图，直接返回
         if (screenshotsList.children.length === 0) return;
         
+        // 显示确认对话框，确认是否要清空所有截图
         if (await showConfirm(
             window.t ? window.t('dialogs.clearScreenshotsConfirm') : '确定要清空所有待发送的截图吗？',
             window.t ? window.t('dialogs.clearScreenshots') : '清空截图',
-            {danger: true}
+            {danger: true} // 标记为危险操作，使用红色警告样式
         )) {
-            screenshotsList.innerHTML = '';
-            screenshotThumbnailContainer.classList.remove('show');
-            updateScreenshotCount();
+            // 用户确认后，清空所有截图
+            screenshotsList.innerHTML = ''; // 清空截图列表容器
+            screenshotThumbnailContainer.classList.remove('show'); // 隐藏缩略图容器
+            updateScreenshotCount(); // 重置计数为0
         }
     });
 

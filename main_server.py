@@ -333,77 +333,22 @@ async def save_screenshot(request: Request):
         if not data or not isinstance(data, str):
             return JSONResponse(status_code=400, content={"success": False, "error": "invalid payload"})
 
-        # data URL 格式：data:<mime>;base64,<b64data>
-        if ',' not in data:
-            return JSONResponse(status_code=400, content={"success": False, "error": "invalid data url"})
-        header, b64 = data.split(',', 1)
-
-        import base64, datetime
-
-        # 首先尝试根据配置的 live2d 目录推导保存位置：
-        # 如果 live2d 目录为 D:\...\APP_NAME\live2d，则保存到 D:\...\APP_NAME\Pictures
-        target_dir = None
-        try:
-            live2d_dir = getattr(_config_manager, 'live2d_dir', None)
-            if live2d_dir:
-                from pathlib import Path
-                p = Path(live2d_dir)
-                parent = p.parent
-                candidate = parent / 'Pictures'
-                try:
-                    os.makedirs(str(candidate), exist_ok=True)
-                    testfile = candidate / '.nkatest'
-                    with open(str(testfile), 'w') as f:
-                        f.write('ok')
-                    os.remove(str(testfile))
-                    target_dir = str(candidate)
-                except Exception:
-                    # 如果无法在候选目录写入，则继续回退逻辑
-                    target_dir = None
-        except Exception:
-            target_dir = None
-
-        # 如果未成功确定目标目录，使用平台回退策略
-        if not target_dir:
-            # 回退到当前用户 home 下的 APP_NAME/Pictures
-            home = os.path.expanduser('~')
-            candidate = os.path.join(home, APP_NAME, 'Pictures')
-            os.makedirs(candidate, exist_ok=True)
-            target_dir = candidate
-
-        # 生成文件名
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        # 根据 header 推断扩展名
-        ext = 'jpg'
-        if 'png' in header:
-            ext = 'png'
-        filename = f'screenshot_{timestamp}.{ext}'
-        file_path = os.path.join(target_dir, filename)
-
-        # 写入文件
-        with open(file_path, 'wb') as f:
-            f.write(base64.b64decode(b64))
-
+        # 使用共享工具函数保存截图
+        from utils.file_utils import save_base64_image
+        
+        success, file_path, error_msg = save_base64_image(
+            data_url=data,
+            config_manager=_config_manager,
+            app_name=APP_NAME,
+            filename_prefix="screenshot",
+            auto_delete_days=7,  # 7天后自动删除
+            logger=logger
+        )
+        
+        if not success:
+            return JSONResponse(status_code=500, content={"success": False, "error": error_msg})
+        
         logger.info(f"Saved screenshot to {file_path}")
-
-        # 安排后台任务：在 delay 秒后永久删除该文件（默认 7 天）
-        try:
-            import asyncio
-            # 改为 7 天后删除（秒）
-            SEVEN_DAYS_SECONDS = 7 * 24 * 3600
-            
-            async def _delayed_remove(path, delay=SEVEN_DAYS_SECONDS):
-                try:
-                    await asyncio.sleep(delay)
-                    if os.path.exists(path):
-                        os.remove(path)
-                        logger.info(f"Auto-deleted screenshot: {path}")
-                except Exception as _e:
-                    logger.error(f"Failed to auto-delete screenshot {path}: {_e}")
-
-            asyncio.create_task(_delayed_remove(file_path, SEVEN_DAYS_SECONDS))
-        except Exception as e:
-            logger.warning(f"无法安排截图自动删除任务: {e}")
 
         return {"success": True, "path": file_path}
     except Exception as e:
