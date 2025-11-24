@@ -1329,7 +1329,7 @@ class Live2DManager {
         Object.assign(buttonsContainer.style, {
             position: 'fixed',
             zIndex: '30',
-            pointerEvents: 'none',
+            pointerEvents: 'auto', // 允许容器接收事件（用于拖动），子按钮也设置为auto以便点击
             display: 'none', // 初始隐藏，鼠标靠近时才显示
             flexDirection: 'column',
             gap: '12px'
@@ -1883,7 +1883,7 @@ class Live2DManager {
             // 只在按钮容器本身被点击时开始拖动（不是按钮）
             if (e.target === buttonsContainer) {
                 isDragging = true;
-                isClick = true; // 标记为可能的点击，移动一定阈值后会取消
+                isClick = true; // 初始标记为点击
                 dragStartX = e.clientX;
                 dragStartY = e.clientY;
 
@@ -1893,7 +1893,7 @@ class Live2DManager {
                 containerStartX = currentLeft;
                 containerStartY = currentTop;
 
-                // 设置拖拽标记（用于其他逻辑判断）
+                // 设置拖拽标记（初始为false）
                 buttonsContainer.setAttribute('data-dragging', 'false');
 
                 // 改变鼠标样式
@@ -1907,6 +1907,14 @@ class Live2DManager {
             if (isDragging) {
                 const deltaX = e.clientX - dragStartX;
                 const deltaY = e.clientY - dragStartY;
+                
+                // 如果移动距离超过阈值，则认为是拖拽而不是点击
+                const dragThreshold = 5; // 5像素阈值
+                if (Math.abs(deltaX) > dragThreshold || Math.abs(deltaY) > dragThreshold) {
+                    isClick = false; // 取消点击标记
+                    // 标记为拖拽操作
+                    buttonsContainer.setAttribute('data-dragging', 'true');
+                }
                 
                 const newX = containerStartX + deltaX;
                 const newY = containerStartY + deltaY;
@@ -1930,7 +1938,7 @@ class Live2DManager {
         // 鼠标释放事件
         document.addEventListener('mouseup', (e) => {
             if (isDragging) {
-                // 如果是拖拽操作，阻止点击事件
+                // 如果是拖拽操作（而非点击），阻止点击事件
                 if (!isClick) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1942,7 +1950,6 @@ class Live2DManager {
                 }, 100);
 
                 isDragging = false;
-                isClick = false;
                 buttonsContainer.style.cursor = 'grab';
             }
         });
@@ -1977,6 +1984,14 @@ class Live2DManager {
                 const deltaX = touch.clientX - dragStartX;
                 const deltaY = touch.clientY - dragStartY;
                 
+                // 如果移动距离超过阈值，则认为是拖拽而不是点击
+                const dragThreshold = 5; // 5像素阈值
+                if (Math.abs(deltaX) > dragThreshold || Math.abs(deltaY) > dragThreshold) {
+                    isClick = false; // 取消点击标记
+                    // 标记为拖拽操作
+                    buttonsContainer.setAttribute('data-dragging', 'true');
+                }
+                
                 const newX = containerStartX + deltaX;
                 const newY = containerStartY + deltaY;
                 
@@ -1997,7 +2012,7 @@ class Live2DManager {
         
         document.addEventListener('touchend', (e) => {
             if (isDragging) {
-                // 如果是拖拽操作，阻止点击事件
+                // 如果是拖拽操作（而非点击），阻止点击事件
                 if (!isClick) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -2009,7 +2024,6 @@ class Live2DManager {
                 }, 100);
 
                 isDragging = false;
-                isClick = false;
             }
         });
     }
@@ -2856,6 +2870,9 @@ class Live2DManager {
                 
                 // 再次使用RAF确保布局稳定
                 requestAnimationFrame(() => {
+                    // 注意：getBoundingClientRect返回的坐标是相对于视口的
+                    // 由于popup使用position: fixed定位，其定位也是相对于视口的
+                    // 因此不需要添加window.scrollX/scrollY进行坐标转换
                     const popupRect = popup.getBoundingClientRect();
                     const screenWidth = window.innerWidth;
                     const screenHeight = window.innerHeight;
