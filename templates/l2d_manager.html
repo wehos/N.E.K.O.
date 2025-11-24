@@ -254,25 +254,6 @@
         // 全局变量：跟踪未保存的更改
         window.hasUnsavedChanges = false;
 
-        document.addEventListener('DOMContentLoaded', async () => {
-        const statusDiv = document.getElementById('status');
-        const modelSelect = document.getElementById('model-select');
-        const motionSelect = document.getElementById('motion-select');
-        const expressionSelect = document.getElementById('expression-select');
-        const playMotionBtn = document.getElementById('play-motion-btn');
-        const playExpressionBtn = document.getElementById('play-expression-btn');
-        const emotionManagerBtn = document.getElementById('emotion-manager-btn');
-        const savePositionBtn = document.getElementById('save-position-btn');
-        const persistentBox = document.getElementById('persistent-box');
-        const persistentSelect = document.getElementById('persistent-expression-select');
-        const addPersistentBtn = document.getElementById('add-persistent-btn');
-        const persistentList = document.getElementById('persistent-list');
-        const savePersistentBtn = document.getElementById('save-persistent-btn');
-        const uploadBtn = document.getElementById('upload-btn');
-        const modelUpload = document.getElementById('model-upload');
-        const uploadStatus = document.getElementById('upload-status');
-        const backToMainBtn = document.getElementById('backToMainBtn');
-        
         // 全屏控制函数
         const requestFullscreen = () => {
             const elem = document.documentElement;
@@ -307,6 +288,36 @@
                      document.mozFullScreenElement || 
                      document.msFullscreenElement);
         };
+
+        document.addEventListener('DOMContentLoaded', async () => {
+        // Electron白屏修复
+        if (document.body) {
+            void document.body.offsetHeight;
+            const currentOpacity = document.body.style.opacity || '1';
+            document.body.style.opacity = '0.99';
+            requestAnimationFrame(() => {
+                document.body.style.opacity = currentOpacity;
+            });
+        }
+
+        const statusDiv = document.getElementById('status');
+        const modelSelect = document.getElementById('model-select');
+        const motionSelect = document.getElementById('motion-select');
+        const expressionSelect = document.getElementById('expression-select');
+        const playMotionBtn = document.getElementById('play-motion-btn');
+        const playExpressionBtn = document.getElementById('play-expression-btn');
+        const emotionManagerBtn = document.getElementById('emotion-manager-btn');
+        const savePositionBtn = document.getElementById('save-position-btn');
+        const persistentBox = document.getElementById('persistent-box');
+        const persistentSelect = document.getElementById('persistent-expression-select');
+        const addPersistentBtn = document.getElementById('add-persistent-btn');
+        const persistentList = document.getElementById('persistent-list');
+        const savePersistentBtn = document.getElementById('save-persistent-btn');
+        const uploadBtn = document.getElementById('upload-btn');
+        const modelUpload = document.getElementById('model-upload');
+        const uploadStatus = document.getElementById('upload-status');
+        const backToMainBtn = document.getElementById('backToMainBtn');
+        
         
         // 检测页面来源，设置返回按钮文本
         const isPopupWindow = window.opener !== null;
@@ -326,14 +337,17 @@
             fullscreenBtn.id = 'fullscreen-btn';
             fullscreenBtn.className = 'btn btn-primary';
             fullscreenBtn.textContent = t('live2d.toggleFullscreen', '切换全屏');
+            fullscreenBtn.setAttribute('data-i18n', 'live2d.toggleFullscreen');
             fullscreenBtn.onclick = async () => {
                 try {
                     if (isFullscreen()) {
                         await exitFullscreen();
                         fullscreenBtn.textContent = t('live2d.toggleFullscreen', '切换全屏');
+                        fullscreenBtn.setAttribute('data-i18n', 'live2d.toggleFullscreen');
                     } else {
                         await requestFullscreen();
                         fullscreenBtn.textContent = t('live2d.exitFullscreen', '退出全屏');
+                        fullscreenBtn.setAttribute('data-i18n', 'live2d.exitFullscreen');
                     }
                 } catch (e) {
                     console.log('切换全屏失败:', e);
@@ -358,14 +372,18 @@
             if (fullscreenBtn) {
                 if (isFullscreen()) {
                     fullscreenBtn.textContent = t('live2d.exitFullscreen', '退出全屏');
+                    fullscreenBtn.setAttribute('data-i18n', 'live2d.exitFullscreen');
                 } else {
                     fullscreenBtn.textContent = t('live2d.toggleFullscreen', '切换全屏');
+                    fullscreenBtn.setAttribute('data-i18n', 'live2d.toggleFullscreen');
                 }
             }
         }
         
-        // 页面加载时发送消息隐藏主界面
-        sendMessageToMainPage('hide_main_ui');
+        // 页面加载时发送消息隐藏主界面（仅在弹出窗口模式下）
+        if (isPopupWindow) {
+            sendMessageToMainPage('hide_main_ui');
+        }
 
         // 翻译辅助函数：简化翻译调用并处理错误
         function t(key, fallback, params = {}) {
@@ -680,9 +698,7 @@
         // 返回主页/关闭按钮
         backToMainBtn.addEventListener('click', async () => {
             // 检查是否有未保存的更改
-            console.log('返回按钮被点击，hasUnsavedChanges =', window.hasUnsavedChanges);
             if (window.hasUnsavedChanges) {
-                console.log('检测到未保存的更改，显示确认对话框');
                 const message = t('dialogs.unsavedChanges', '您有未保存的设置，确定要离开吗？');
                 const title = t('dialogs.confirmLeave', '确认离开');
                 const confirmLeave = await showConfirm(message, title, { danger: true });
@@ -690,6 +706,8 @@
                 if (!confirmLeave) {
                     return; // 用户取消，不离开
                 }
+                // 用户确认离开，重置未保存状态，避免被 beforeunload 拦截
+                window.hasUnsavedChanges = false;
             } else {
                 console.log('没有未保存的更改，直接返回');
             }
@@ -698,7 +716,6 @@
             if (isFullscreen()) {
                 try {
                     await exitFullscreen();
-                    // 等待全屏退出完成
                     await new Promise(resolve => setTimeout(resolve, 100));
                 } catch (e) {
                     console.log('退出全屏失败:', e);
@@ -1048,20 +1065,27 @@
                 }
             }
             
-            sendMessageToMainPage('show_main_ui');
+            if (window.opener) {
+                sendMessageToMainPage('show_main_ui');
+            }
             
-            // 如果有未保存的更改，阻止页面关闭并显示确认对话框
-            // 注意：现代浏览器会忽略自定义消息，显示标准的确认对话框
+            // 如果有未保存的更改，本应阻止页面关闭并显示确认对话框
+            // 但在Electron中可能导致无法关闭窗口，且无法使用自定义模态窗替代系统默认弹窗
+            // 因此直接允许关闭，不再拦截
+            /* 
             if (window.hasUnsavedChanges) {
                 e.preventDefault();
                 e.returnValue = ''; // Chrome需要这个
                 return ''; // 某些浏览器需要返回值
             }
+            */
         });
         
         // 确保在页面关闭时也恢复主界面
         window.addEventListener('unload', () => {
-            sendMessageToMainPage('show_main_ui');
+            if (window.opener) {
+                sendMessageToMainPage('show_main_ui');
+            }
         });
         </script>
 

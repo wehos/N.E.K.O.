@@ -81,6 +81,8 @@ function init_app(){
     let workletNode;
     let stream;
     let isRecording = false;
+    // 暴露 isRecording 到全局，供其他模块检查
+    window.isRecording = false;
     let socket;
     let currentGeminiMessage = null;
     let audioPlayerContext = null;
@@ -317,6 +319,11 @@ function init_app(){
                     console.log('收到session_started事件，模式:', response.input_mode);
                     // 解析 session_started Promise
                     if (sessionStartedResolver) {
+                        // 清除可能存在的超时定时器（通过全局变量）
+                        if (window.sessionTimeoutId) {
+                            clearTimeout(window.sessionTimeoutId);
+                            window.sessionTimeoutId = null;
+                        }
                         sessionStartedResolver(response.input_mode);
                         sessionStartedResolver = null;
                     }
@@ -547,7 +554,11 @@ function init_app(){
             if (audioTracks.length === 0) {
                 console.error("没有可用的音频轨道");
                 showStatusToast(window.t ? window.t('app.micAccessDenied') : '无法访问麦克风', 4000);
-                return;
+                // 移除已添加的类
+                micButton.classList.remove('recording');
+                micButton.classList.remove('active');
+                // 抛出错误，让外层 catch 块处理按钮状态恢复
+                throw new Error('没有可用的音频轨道');
             }
 
             await startAudioWorklet(stream);
@@ -559,8 +570,10 @@ function init_app(){
             resetSessionButton.disabled = false;
             showStatusToast(window.t ? window.t('app.speaking') : '正在语音...', 2000);
             
-            // 添加active类以保持激活状态的颜色
-            micButton.classList.add('active');
+            // 确保active类存在（已经在点击时添加，这里确保存在）
+            if (!micButton.classList.contains('active')) {
+                micButton.classList.add('active');
+            }
             
             // 开始录音时，停止主动搭话定时器
             stopProactiveChatSchedule();
@@ -571,6 +584,8 @@ function init_app(){
             micButton.classList.remove('recording');
             // 移除active类
             micButton.classList.remove('active');
+            // 抛出错误，让外层 catch 块处理按钮状态恢复
+            throw err;
         }
     }
 
@@ -903,8 +918,43 @@ function init_app(){
         }, 2000);
     }
 
+    // 同步浮动麦克风按钮状态的辅助函数
+    function syncFloatingMicButtonState(isActive) {
+        if (window.live2dManager && window.live2dManager._floatingButtons && window.live2dManager._floatingButtons.mic) {
+            const floatingMicBtn = window.live2dManager._floatingButtons.mic.button;
+            if (floatingMicBtn) {
+                floatingMicBtn.dataset.active = isActive ? 'true' : 'false';
+                const imgOff = window.live2dManager._floatingButtons.mic.imgOff;
+                const imgOn = window.live2dManager._floatingButtons.mic.imgOn;
+                if (imgOff && imgOn) {
+                    imgOff.style.opacity = isActive ? '0' : '1';
+                    imgOn.style.opacity = isActive ? '1' : '0';
+                }
+            }
+        }
+    }
+
     // 开始麦克风录音
     micButton.addEventListener('click', async () => {
+        // 如果按钮已禁用或正在录音，直接返回
+        if (micButton.disabled || isRecording) {
+            return;
+        }
+        
+        // 如果已经有 active 类，说明正在处理中，直接返回（防止重复点击）
+        if (micButton.classList.contains('active')) {
+            return;
+        }
+        
+        // 立即添加激活状态类，保持常亮状态
+        micButton.classList.add('active');
+        
+        // 同步更新浮动按钮状态，防止浮动按钮状态不同步导致图标变灰
+        syncFloatingMicButtonState(true);
+        
+        // 立即禁用按钮，锁定直到连接成功或失败
+        micButton.disabled = true;
+        
         // 立即显示准备提示
         showVoicePreparingToast(window.t ? window.t('app.voiceSystemPreparing') : '语音系统准备中...');
         
@@ -929,8 +979,7 @@ function init_app(){
             textInputArea.classList.add('hidden');
         }
         
-        // 立即禁用所有语音按钮
-        micButton.disabled = true;
+        // 禁用所有语音按钮（micButton 已在函数开始处禁用）
         muteButton.disabled = true;
         screenButton.disabled = true;
         stopButton.disabled = true;
@@ -942,16 +991,31 @@ function init_app(){
         
         try {
             // 创建一个 Promise 来等待 session_started 消息
+            let timeoutId = null; // 在外部作用域定义，以便清除
             const sessionStartPromise = new Promise((resolve, reject) => {
                 sessionStartedResolver = resolve;
                 
-                // 设置超时（15秒），如果超时则拒绝
-                setTimeout(() => {
+                // 清除之前的超时定时器（如果存在）
+                if (window.sessionTimeoutId) {
+                    clearTimeout(window.sessionTimeoutId);
+                }
+                
+                // 设置超时（10秒），如果超时则拒绝
+                timeoutId = setTimeout(() => {
                     if (sessionStartedResolver) {
-                        sessionStartedResolver = null;
+                        const resolver = sessionStartedResolver;
+                        sessionStartedResolver = null; // 先清除，防止重复触发
+                        window.sessionTimeoutId = null; // 清除全局定时器ID
+                        // 更新提示信息，显示超时
+                        showVoicePreparingToast(window.t ? window.t('app.sessionTimeout') || '连接超时' : '连接超时，请检查网络连接');
                         reject(new Error(window.t ? window.t('app.sessionTimeout') : 'Session启动超时'));
+                    } else {
+                        window.sessionTimeoutId = null; // 即使 resolver 不存在也清除
                     }
-                }, 15000);
+                }, 10000); // 10秒超时
+                
+                // 保存到全局变量，以便在 session_started 事件中清除
+                window.sessionTimeoutId = timeoutId;
             });
             
             // 发送start session事件
@@ -961,11 +1025,36 @@ function init_app(){
                     input_type: 'audio'
                 }));
             } else {
+                // WebSocket未连接，清除超时定时器和状态
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+                if (window.sessionTimeoutId) {
+                    clearTimeout(window.sessionTimeoutId);
+                    window.sessionTimeoutId = null;
+                }
+                if (sessionStartedResolver) {
+                    sessionStartedResolver = null;
+                }
                 throw new Error(window.t ? window.t('app.websocketNotConnectedError') : 'WebSocket未连接');
             }
             
             // 等待session真正启动成功
-            await sessionStartPromise;
+            try {
+                await sessionStartPromise;
+                // 成功时清除超时定时器
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                }
+            } catch (error) {
+                // 超时或错误时清除超时定时器
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                }
+                throw error; // 重新抛出错误，让外层 catch 处理
+            }
             
             showStatusToast(window.t ? window.t('app.initializingMic') : '正在初始化麦克风...', 3000);
             showVoicePreparingToast(window.t ? window.t('app.initializingMic') : '正在初始化麦克风...');
@@ -986,10 +1075,24 @@ function init_app(){
         } catch (error) {
             console.error('启动语音会话失败:', error);
             
+            // 清除所有超时定时器和状态
+            if (window.sessionTimeoutId) {
+                clearTimeout(window.sessionTimeoutId);
+                window.sessionTimeoutId = null;
+            }
+            if (sessionStartedResolver) {
+                sessionStartedResolver = null;
+            }
+            
             // 隐藏准备提示
             hideVoicePreparingToast();
             
-            // 如果失败，恢复按钮状态和文本输入区
+            // 失败时：移除激活状态（按钮变暗），恢复按钮（允许再次点击）
+            micButton.classList.remove('active');
+            
+            // 同步更新浮动按钮状态，确保浮动按钮也变灰
+            syncFloatingMicButtonState(false);
+            
             micButton.disabled = false;
             muteButton.disabled = true;
             screenButton.disabled = true;
@@ -999,8 +1102,7 @@ function init_app(){
             showStatusToast(window.t ? window.t('app.startFailed', {error: error.message}) : `启动失败: ${error.message}`, 5000);
             isSwitchingMode = false; // 切换失败，重置标志
             
-            // 移除active类
-            micButton.classList.remove('active');
+            // 移除其他按钮的active类
             screenButton.classList.remove('active');
         }
     });
@@ -1140,6 +1242,7 @@ function init_app(){
         
         // 确保停止录音状态
         isRecording = false;
+        window.isRecording = false;
         
         // 同步更新Live2D浮动按钮的状态
         if (window.live2dManager && window.live2dManager._floatingButtons) {
@@ -1611,6 +1714,7 @@ function init_app(){
     // 使用AudioWorklet开始音频处理
     async function startAudioWorklet(stream) {
         isRecording = true;
+        window.isRecording = true;
 
         // 创建音频上下文
         audioContext = new AudioContext();
@@ -1688,6 +1792,7 @@ function init_app(){
         if (!isRecording) return;
 
         isRecording = false;
+        window.isRecording = false;
         currentGeminiMessage = null;
         
         // 停止静音检测
@@ -2029,10 +2134,14 @@ function init_app(){
     // 麦克风按钮（toggle模式）
     window.addEventListener('live2d-mic-toggle', async (e) => {
         if (e.detail.active) {
+            // 想要开启语音：如果 micButton 已经有 active 类，说明正在处理中或已激活，直接返回
+            if (micButton.classList.contains('active')) {
+                return;
+            }
             // 开始语音
             micButton.click(); // 触发原有的麦克风按钮点击
         } else {
-            // 停止语音
+            // 想要关闭语音：允许执行，即使 micButton 有 active 类（因为这是正常的退出操作）
             muteButton.click(); // 触发原有的停止按钮点击
         }
     });
@@ -2096,7 +2205,7 @@ function init_app(){
                 proactiveChatDiv.style.cssText = 'padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(0,0,0,0.1);';
                 const proactiveChatSpan = document.createElement('span');
                 proactiveChatSpan.style.fontSize = '14px';
-                proactiveChatSpan.textContent = window.t ? window.t('settings.toggles.proactiveChat') : '💬 主动搭话';
+                proactiveChatSpan.textContent = window.t ? window.t('settings.toggles.proactiveChat') : '主动搭话';
                 proactiveChatSpan.setAttribute('data-i18n', 'settings.toggles.proactiveChat');
                 proactiveChatDiv.appendChild(proactiveChatSpan);
                 const proactiveChatCheckbox = document.createElement('input');
@@ -3299,8 +3408,13 @@ const ready = () => {
     init_app();
 };
 
-document.addEventListener("DOMContentLoaded", ready);
-window.addEventListener("load", ready);
+// 检查页面加载状态，如果已加载完成则直接执行
+if (document.readyState === "complete" || document.readyState === "interactive") {
+    setTimeout(ready, 1); // 使用setTimeout确保异步执行，避免阻塞当前脚本执行
+} else {
+    document.addEventListener("DOMContentLoaded", ready);
+    window.addEventListener("load", ready);
+}
 
 // 页面加载后显示启动提示
 window.addEventListener("load", () => {

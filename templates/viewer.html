@@ -342,6 +342,26 @@
     
     // 标记配置是否已加载
     window.pageConfigReady = loadPageConfig();
+
+    // Electron白屏修复
+    (function() {
+        const fixWhiteScreen = () => {
+            if (document.body) {
+                void document.body.offsetHeight;
+                const currentOpacity = document.body.style.opacity || '1';
+                document.body.style.opacity = '0.99';
+                requestAnimationFrame(() => {
+                    document.body.style.opacity = currentOpacity;
+                });
+            }
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', fixWhiteScreen);
+        } else {
+            fixWhiteScreen();
+        }
+        window.addEventListener('load', fixWhiteScreen);
+    })();
 </script>
 <script src="/static/libs/live2dcubismcore.min.js"></script>
 <script src="/static/libs/live2d.min.js"></script>

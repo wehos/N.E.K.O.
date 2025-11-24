@@ -471,6 +471,21 @@
         // 页面加载时初始化
         document.addEventListener('DOMContentLoaded', function() {
             loadAvailableModels();
+            
+            // Electron白屏修复
+            if (document.body) {
+                void document.body.offsetHeight;
+                const currentOpacity = document.body.style.opacity || '1';
+                document.body.style.opacity = '0.99';
+                requestAnimationFrame(() => {
+                    document.body.style.opacity = currentOpacity;
+                });
+            }
+        });
+        
+        // 备用：load事件再次触发
+        window.addEventListener('load', function() {
+            if (document.body) void document.body.offsetHeight;
         });
 
         // 全局错误处理

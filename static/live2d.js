@@ -1092,8 +1092,8 @@ class Live2DManager {
                     (window.innerWidth * 0.6) / 7000
                 );
                 model.scale.set(scale);
-                model.x = this.pixi_app.renderer.width;
-                model.y = this.pixi_app.renderer.height;
+                model.x = this.pixi_app.renderer.width * 0.5;
+                model.y = this.pixi_app.renderer.height * 0.5;
             }
             model.anchor.set(0.65, 0.75);
         }
@@ -1576,8 +1576,34 @@ class Live2DManager {
                 
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
+                    
+                    // 对于麦克风按钮，在计算状态之前就检查 micButton 的状态
+                    if (config.id === 'mic') {
+                        const micButton = document.getElementById('micButton');
+                        if (micButton && micButton.classList.contains('active')) {
+                            // 检查是否正在录音：如果 isRecording 为 true，说明已经启动成功，允许点击退出
+                            // 如果 isRecording 为 false，说明正在启动过程中，阻止点击
+                            const isRecording = window.isRecording || false; // 从全局获取 isRecording 状态
+                            
+                            if (!isRecording) {
+                                // 正在启动过程中，强制保持激活状态，不切换
+                                // 确保浮动按钮状态与 micButton 同步
+                                if (btn.dataset.active !== 'true') {
+                                    btn.dataset.active = 'true';
+                                    if (imgOff && imgOn) {
+                                        imgOff.style.opacity = '0';
+                                        imgOn.style.opacity = '1';
+                                    }
+                                }
+                                return; // 直接返回，不执行任何状态切换或事件触发
+                            }
+                            // 如果 isRecording 为 true，说明已经启动成功，允许继续执行（可以退出）
+                        }
+                    }
+                    
                     const isActive = btn.dataset.active === 'true';
                     const newActive = !isActive;
+                    
                     btn.dataset.active = newActive.toString();
                     
                     // 更新图标状态
@@ -2689,12 +2715,69 @@ class Live2DManager {
             const focusCheckbox = popup.querySelector('#live2d-focus-mode');
             const proactiveChatCheckbox = popup.querySelector('#live2d-proactive-chat');
             
+            // 辅助函数：更新 checkbox 的视觉样式
+            const updateCheckboxStyle = (checkbox) => {
+                if (!checkbox) return;
+                // toggleItem 是 checkbox 的父元素
+                const toggleItem = checkbox.parentElement;
+                if (!toggleItem) return;
+                
+                // indicator 是 toggleItem 的第二个子元素（第一个是 checkbox，第二个是 indicator）
+                const indicator = toggleItem.children[1];
+                if (!indicator) return;
+                
+                // checkmark 是 indicator 的第一个子元素
+                const checkmark = indicator.firstElementChild;
+                
+                if (checkbox.checked) {
+                    // 选中状态：蓝色填充，蓝色边框，显示对勾，背景颜色突出
+                    indicator.style.backgroundColor = '#44b7fe';
+                    indicator.style.borderColor = '#44b7fe';
+                    if (checkmark) checkmark.style.opacity = '1';
+                    toggleItem.style.background = 'rgba(68, 183, 254, 0.1)';
+                } else {
+                    // 未选中状态：灰色边框，透明填充，隐藏对勾，无背景
+                    indicator.style.backgroundColor = 'transparent';
+                    indicator.style.borderColor = '#ccc';
+                    if (checkmark) checkmark.style.opacity = '0';
+                    toggleItem.style.background = 'transparent';
+                }
+            };
+            
+            // 更新 focus mode checkbox 状态和视觉样式
             if (focusCheckbox && typeof window.focusModeEnabled !== 'undefined') {
                 // "允许打断"按钮值与 focusModeEnabled 相反
-                focusCheckbox.checked = !window.focusModeEnabled;
+                const newChecked = !window.focusModeEnabled;
+                // 只在状态改变时更新，避免不必要的 DOM 操作
+                if (focusCheckbox.checked !== newChecked) {
+                    focusCheckbox.checked = newChecked;
+                    // 使用 requestAnimationFrame 确保 DOM 已更新后再更新样式
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(focusCheckbox);
+                    });
+                } else {
+                    // 即使状态相同，也确保视觉样式正确（处理概率性问题）
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(focusCheckbox);
+                    });
+                }
             }
+            
+            // 更新 proactive chat checkbox 状态和视觉样式
             if (proactiveChatCheckbox && typeof window.proactiveChatEnabled !== 'undefined') {
-                proactiveChatCheckbox.checked = window.proactiveChatEnabled;
+                const newChecked = window.proactiveChatEnabled;
+                // 只在状态改变时更新，避免不必要的 DOM 操作
+                if (proactiveChatCheckbox.checked !== newChecked) {
+                    proactiveChatCheckbox.checked = newChecked;
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(proactiveChatCheckbox);
+                    });
+                } else {
+                    // 即使状态相同，也确保视觉样式正确（处理概率性问题）
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(proactiveChatCheckbox);
+                    });
+                }
             }
         }
         
@@ -3044,7 +3127,8 @@ window.LanLan1.clearExpression = () => window.live2dManager.clearExpression();
 window.LanLan1.setMouth = (value) => window.live2dManager.setMouth(value);
 
 // 自动初始化（如果存在 cubism4Model 变量）
-if (typeof cubism4Model !== 'undefined' && cubism4Model) {
+const targetModelPath = (typeof cubism4Model !== 'undefined' ? cubism4Model : (window.cubism4Model || ''));
+if (targetModelPath) {
     (async function() {
         try {
             // 初始化 PIXI 应用
@@ -3056,7 +3140,7 @@ if (typeof cubism4Model !== 'undefined' && cubism4Model) {
             // 根据模型路径找到对应的偏好设置
             let modelPreferences = null;
             if (preferences && preferences.length > 0) {
-                modelPreferences = preferences.find(p => p && p.model_path === cubism4Model);
+                modelPreferences = preferences.find(p => p && p.model_path === targetModelPath);
                 if (modelPreferences) {
                     console.log('找到模型偏好设置:', modelPreferences);
                 } else {
@@ -3065,7 +3149,7 @@ if (typeof cubism4Model !== 'undefined' && cubism4Model) {
             }
             
             // 加载模型
-            await window.live2dManager.loadModel(cubism4Model, {
+            await window.live2dManager.loadModel(targetModelPath, {
                 preferences: modelPreferences,
                 isMobile: window.innerWidth <= 768
             });
