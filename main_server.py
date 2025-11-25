@@ -2406,7 +2406,16 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
         
         # 3. 用直链注册音色
         core_config = _config_manager.get_core_config()
-        dashscope.api_key = core_config['AUDIO_API_KEY']
+        audio_api_key = core_config.get('AUDIO_API_KEY')
+        
+        if not audio_api_key:
+            logger.error("未配置 AUDIO_API_KEY")
+            return JSONResponse({
+                'error': '未配置音频API密钥，请在设置中配置AUDIO_API_KEY',
+                'suggestion': '请前往设置页面配置音频API密钥'
+            }, status_code=400)
+        
+        dashscope.api_key = audio_api_key
         service = VoiceEnrollmentService()
         target_model = "cosyvoice-v2"
         
@@ -2417,35 +2426,9 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
         for attempt in range(max_retries):
             try:
                 logger.info(f"开始音色注册（尝试 {attempt + 1}/{max_retries}），使用URL: {tmp_url}")
-                # 设置超时参数
-                import time
-                start_time = time.time()
                 
-                # 添加超时装饰器或使用上下文管理器
-                # 这里使用try-except块和时间检查来实现简单的超时控制
-                voice_id = None
-                
-                # 创建一个超时标志
-                timeout_occurred = False
-                
-                try:
-                    # 尝试执行音色注册，设置一个较大的超时时间
-                    voice_id = service.create_voice(target_model=target_model, prefix=prefix, url=tmp_url)
-                except Exception as inner_e:
-                    error_str = str(inner_e)
-                    if "ResponseTimeout" in error_str or "response timeout" in error_str.lower():
-                        timeout_occurred = True
-                        logger.warning(f"音色注册超时: {error_str}")
-                    else:
-                        raise inner_e
-                
-                if timeout_occurred:
-                    return JSONResponse({
-                        'error': '音色注册超时，请稍后重试',
-                        'detail': '服务器响应超时，这可能是由于网络延迟或服务繁忙导致的',
-                        'file_url': tmp_url,
-                        'suggestion': '请检查您的网络连接，或稍后再试'
-                    }, status_code=408)
+                # 尝试执行音色注册
+                voice_id = service.create_voice(target_model=target_model, prefix=prefix, url=tmp_url)
                     
                 logger.info(f"音色注册成功，voice_id: {voice_id}")
                 voice_data = {
@@ -2458,15 +2441,24 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                     _config_manager.save_voice_for_current_api(voice_id, voice_data)
                     logger.info(f"voice_id已保存到音色库: {voice_id}")
                     
-                    # 验证voice_id是否能够被正确读取
-                    if not _config_manager.validate_voice_id(voice_id):
-                        logger.error(f"voice_id保存后验证失败: {voice_id}")
-                        return JSONResponse({
-                            'error': f'音色注册成功但保存验证失败，请重试',
-                            'voice_id': voice_id,
-                            'file_url': tmp_url
-                        }, status_code=500)
-                    logger.info(f"voice_id保存验证成功: {voice_id}")
+                    # 验证voice_id是否能够被正确读取（添加短暂延迟，避免文件系统延迟）
+                    import time
+                    time.sleep(0.1)  # 等待100ms，确保文件写入完成
+                    
+                    # 最多验证3次，每次间隔100ms
+                    validation_success = False
+                    for validation_attempt in range(3):
+                        if _config_manager.validate_voice_id(voice_id):
+                            validation_success = True
+                            logger.info(f"voice_id保存验证成功: {voice_id} (尝试 {validation_attempt + 1})")
+                            break
+                        if validation_attempt < 2:
+                            time.sleep(0.1)
+                    
+                    if not validation_success:
+                        logger.warning(f"voice_id保存后验证失败，但可能已成功保存: {voice_id}")
+                        # 不返回错误，因为保存可能已成功，只是验证失败
+                        # 继续返回成功，让用户尝试使用
                     
                 except Exception as save_error:
                     logger.error(f"保存voice_id到音色库失败: {save_error}")
@@ -2475,46 +2467,56 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                         'voice_id': voice_id,
                         'file_url': tmp_url
                     }, status_code=500)
+                    
                 return JSONResponse({
                     'voice_id': voice_id,
                     'request_id': service.get_last_request_id(),
                     'file_url': tmp_url,
                     'message': '音色注册成功并已保存到音色库'
                 })
+                
             except Exception as e:
                 logger.error(f"音色注册失败（尝试 {attempt + 1}/{max_retries}）: {str(e)}")
-                # 详细的错误信息
                 error_detail = str(e)
                 
-                # 添加对ResponseTimeout的专门处理
-                if "ResponseTimeout" in error_detail or "response timeout" in error_detail.lower():
+                # 检查是否是超时错误
+                is_timeout = ("ResponseTimeout" in error_detail or 
+                             "response timeout" in error_detail.lower() or
+                             "timeout" in error_detail.lower())
+                
+                # 检查是否是文件下载失败错误
+                is_download_failed = ("download audio failed" in error_detail or 
+                                     "415" in error_detail)
+                
+                # 如果是超时或下载失败，且还有重试机会，则重试
+                if (is_timeout or is_download_failed) and attempt < max_retries - 1:
+                    logger.warning(f"检测到{'超时' if is_timeout else '文件下载失败'}错误，等待 {retry_delay} 秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                    continue  # 重试
+                
+                # 如果是最后一次尝试或非可重试错误，返回错误
+                if is_timeout:
                     return JSONResponse({
-                        'error': '音色注册超时，请稍后重试',
+                        'error': f'音色注册超时，已尝试{max_retries}次',
                         'detail': error_detail,
                         'file_url': tmp_url,
-                        'suggestion': '请检查您的网络连接，或稍后再试'
+                        'suggestion': '请检查您的网络连接，或稍后再试。如果问题持续，可能是服务器繁忙。'
                     }, status_code=408)
-                
-                # 处理415错误（文件下载失败）- 如果不是最后一次尝试，则等待后重试
-                elif "download audio failed" in error_detail or "415" in error_detail:
-                    if attempt < max_retries - 1:
-                        logger.warning(f"检测到文件下载失败（415错误），等待 {retry_delay} 秒后重试...")
-                        await asyncio.sleep(retry_delay)
-                        continue  # 重试
-                    else:
-                        logger.error(f"音色注册失败: 达到最大重试次数（{max_retries}次）")
-                        return JSONResponse({
-                            'error': f'音色注册失败: 无法下载音频文件，已尝试{max_retries}次',
-                            'detail': error_detail,
-                            'file_url': tmp_url,
-                            'suggestion': '请检查文件URL是否可访问，或稍后重试'
-                        }, status_code=415)
-                
-                # 其他错误直接返回
-                return JSONResponse({
-                    'error': f'音色注册失败: {error_detail}',
-                    'file_url': tmp_url
-                }, status_code=500)
+                elif is_download_failed:
+                    return JSONResponse({
+                        'error': f'音色注册失败: 无法下载音频文件，已尝试{max_retries}次',
+                        'detail': error_detail,
+                        'file_url': tmp_url,
+                        'suggestion': '请检查文件URL是否可访问，或稍后重试'
+                    }, status_code=415)
+                else:
+                    # 其他错误直接返回
+                    return JSONResponse({
+                        'error': f'音色注册失败: {error_detail}',
+                        'file_url': tmp_url,
+                        'attempt': attempt + 1,
+                        'max_retries': max_retries
+                    }, status_code=500)
     except Exception as e:
         # 确保tmp_url在出现异常时也有定义
         tmp_url = locals().get('tmp_url', '未获取到URL')

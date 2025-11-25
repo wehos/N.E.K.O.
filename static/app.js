@@ -2059,6 +2059,27 @@ function init_app(){
     window.addEventListener('live2d-settings-click', () => {
         console.log('设置按钮被点击');
         
+        // 每次打开设置弹出框时，同步 window 中的最新值到局部变量
+        if (typeof window.focusModeEnabled !== 'undefined') {
+            focusModeEnabled = window.focusModeEnabled;
+        }
+        if (typeof window.proactiveChatEnabled !== 'undefined') {
+            proactiveChatEnabled = window.proactiveChatEnabled;
+        }
+        
+        // 如果已经初始化过，更新开关状态
+        if (settingsPopupInitialized) {
+            const proactiveChatToggle = document.getElementById('proactive-chat-toggle-l2d');
+            const focusModeToggle = document.getElementById('focus-mode-toggle-l2d');
+            if (proactiveChatToggle) {
+                proactiveChatToggle.checked = proactiveChatEnabled;
+            }
+            if (focusModeToggle) {
+                focusModeToggle.checked = focusModeEnabled;
+            }
+            return; // 已初始化，直接返回
+        }
+        
         // 仅第一次点击时填充内容
         if (!settingsPopupInitialized) {
             const popup = document.getElementById('live2d-popup-settings');
@@ -2163,6 +2184,14 @@ function init_app(){
                 // 设置初始状态
                 const proactiveChatToggle = document.getElementById('proactive-chat-toggle-l2d');
                 const focusModeToggle = document.getElementById('focus-mode-toggle-l2d');
+                
+                // 从 window 同步最新值到局部变量（防止从 l2d 页面返回时值丢失）
+                if (typeof window.proactiveChatEnabled !== 'undefined') {
+                    proactiveChatEnabled = window.proactiveChatEnabled;
+                }
+                if (typeof window.focusModeEnabled !== 'undefined') {
+                    focusModeEnabled = window.focusModeEnabled;
+                }
                 
                 if (proactiveChatToggle) {
                     proactiveChatToggle.checked = proactiveChatEnabled;
@@ -2283,7 +2312,17 @@ function init_app(){
     window.addEventListener('live2d-return-click', () => {
         console.log('[App] 请她回来按钮被点击，开始恢复所有界面');
         
-        // 第一步：清除"请她离开"标志
+        // 第一步：同步 window 中的设置值到局部变量（防止从 l2d 页面返回时值丢失）
+        if (typeof window.focusModeEnabled !== 'undefined') {
+            focusModeEnabled = window.focusModeEnabled;
+            console.log('[App] 同步 focusModeEnabled:', focusModeEnabled);
+        }
+        if (typeof window.proactiveChatEnabled !== 'undefined') {
+            proactiveChatEnabled = window.proactiveChatEnabled;
+            console.log('[App] 同步 proactiveChatEnabled:', proactiveChatEnabled);
+        }
+        
+        // 第二步：清除"请她离开"标志
         if (window.live2dManager) {
             window.live2dManager._goodbyeClicked = false;
         }
@@ -2291,14 +2330,14 @@ function init_app(){
             window.live2d._goodbyeClicked = false;
         }
         
-        // 第二步：隐藏独立的"请她回来"按钮
+        // 第三步：隐藏独立的"请她回来"按钮
         const returnButtonContainer = document.getElementById('live2d-return-button-container');
         if (returnButtonContainer) {
             returnButtonContainer.style.display = 'none';
             returnButtonContainer.style.pointerEvents = 'none';
         }
         
-        // 第三步：恢复live2d容器（移除minimized类）
+        // 第四步：恢复live2d容器（移除minimized类）
         const live2dContainer = document.getElementById('live2d-container');
         if (live2dContainer) {
             console.log('[App] 移除minimized类前，容器类列表:', live2dContainer.classList.toString());
@@ -2315,7 +2354,7 @@ function init_app(){
             live2dContainer.style.removeProperty('opacity');
         }
         
-        // 第四步：恢复锁按钮
+        // 第五步：恢复锁按钮
         const lockIcon = document.getElementById('live2d-lock-icon');
         if (lockIcon) {
             lockIcon.style.display = 'block';
@@ -2323,7 +2362,7 @@ function init_app(){
             lockIcon.style.removeProperty('opacity');
         }
         
-        // 第五步：恢复浮动按钮系统（使用 !important 强制显示，覆盖之前的隐藏样式）
+        // 第六步：恢复浮动按钮系统（使用 !important 强制显示，覆盖之前的隐藏样式）
         const floatingButtons = document.getElementById('live2d-floating-buttons');
         if (floatingButtons) {
             // 先清除所有可能的隐藏样式
@@ -2348,7 +2387,7 @@ function init_app(){
             }
         }
         
-        // 第六步：恢复对话区
+        // 第七步：恢复对话区
         const chatContainerEl = document.getElementById('chat-container');
         const toggleChatBtn = document.getElementById('toggle-chat-btn');
         if (chatContainerEl && chatContainerEl.classList.contains('minimized')) {
@@ -2358,7 +2397,7 @@ function init_app(){
             }
         }
         
-        // 第七步：触发原有的返回逻辑
+        // 第八步：触发原有的返回逻辑
         if (returnSessionButton) {
             setTimeout(() => {
                 console.log('[App] 触发returnSessionButton点击');

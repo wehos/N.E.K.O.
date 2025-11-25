@@ -74,8 +74,10 @@
     "freeVersion": "Free Version (Recommended for Beginners)",
     "freeVersionDesc": "No registration required, select \"Free Version\" in Advanced Options below",
     "fullVersion": "Full Version (Get API Key)",
-    "step1": "Register an account on Alibaba Cloud and complete real-name verification",
-    "step2": "Visit Alibaba Cloud Bailian Platform API Key Management page",
+    "step1": "Register an account on Alibaba Cloud and",
+    "step1Link": "complete real-name verification",
+    "step2": "Visit Alibaba Cloud Bailian Platform",
+    "step2Link": "API Key Management page",
     "step3": "Create a new API Key and click the copy button",
     "step4": "Paste the API Key into the input box below",
     "tip": "💡 Please ensure the API Key format is correct. Service restart is required after saving.",
@@ -214,6 +216,7 @@
     "customApiWarning": "⚠️ Note: After enabling custom APIs, core APIs and auxiliary APIs will be disabled and cannot be modified.",
     "enableCustomApi": "Enable Custom API Configuration",
     "enableCustomApiNote": "After enabling, custom API configuration will be used, disabling modifications to core APIs and auxiliary APIs",
+    "loadProvidersFailed": "Failed to load API provider options, please refresh the page and try again",
     "saveFailed": "Save failed: {{error}}"
   },
   "live2d": {

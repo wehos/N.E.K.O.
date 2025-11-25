@@ -74,8 +74,10 @@
     "freeVersion": "免费版（推荐新手）",
     "freeVersionDesc": "无需注册，在下方高级选项中选择\"免费版\"即可使用",
     "fullVersion": "完整版（获取API Key）",
-    "step1": "在阿里云注册账号并完成实名认证",
-    "step2": "访问阿里云百炼平台 API Key管理页面",
+    "step1": "在阿里云注册账号并",
+    "step1Link": "完成实名认证",
+    "step2": "访问阿里云百炼平台",
+    "step2Link": "API Key管理页面",
     "step3": "创建新的API Key并点击复制按钮",
     "step4": "将API Key粘贴到下方输入框中",
     "tip": "💡 请确保API Key格式正确。保存后需要重启服务才能生效。",
@@ -214,6 +216,7 @@
     "customApiWarning": "⚠️ 注意：启用自定义API后，核心API和辅助API将被禁用且无法修改。",
     "enableCustomApi": "启用自定义API配置",
     "enableCustomApiNote": "启用后将使用自定义API配置，禁用核心API和辅助API的修改",
+    "loadProvidersFailed": "加载API服务商选项失败，请刷新页面重试",
     "saveFailed": "保存失败: {{error}}"
   },
   "live2d": {

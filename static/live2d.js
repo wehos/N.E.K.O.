@@ -1092,8 +1092,8 @@ class Live2DManager {
                     (window.innerWidth * 0.6) / 7000
                 );
                 model.scale.set(scale);
-                model.x = this.pixi_app.renderer.width;
-                model.y = this.pixi_app.renderer.height;
+                model.x = this.pixi_app.renderer.width * 0.5;
+                model.y = this.pixi_app.renderer.height * 0.5;
             }
             model.anchor.set(0.65, 0.75);
         }
@@ -2389,12 +2389,69 @@ class Live2DManager {
             const focusCheckbox = popup.querySelector('#live2d-focus-mode');
             const proactiveChatCheckbox = popup.querySelector('#live2d-proactive-chat');
             
+            // 辅助函数：更新 checkbox 的视觉样式
+            const updateCheckboxStyle = (checkbox) => {
+                if (!checkbox) return;
+                // toggleItem 是 checkbox 的父元素
+                const toggleItem = checkbox.parentElement;
+                if (!toggleItem) return;
+                
+                // indicator 是 toggleItem 的第二个子元素（第一个是 checkbox，第二个是 indicator）
+                const indicator = toggleItem.children[1];
+                if (!indicator) return;
+                
+                // checkmark 是 indicator 的第一个子元素
+                const checkmark = indicator.firstElementChild;
+                
+                if (checkbox.checked) {
+                    // 选中状态：蓝色填充，蓝色边框，显示对勾，背景颜色突出
+                    indicator.style.backgroundColor = '#44b7fe';
+                    indicator.style.borderColor = '#44b7fe';
+                    if (checkmark) checkmark.style.opacity = '1';
+                    toggleItem.style.background = 'rgba(68, 183, 254, 0.1)';
+                } else {
+                    // 未选中状态：灰色边框，透明填充，隐藏对勾，无背景
+                    indicator.style.backgroundColor = 'transparent';
+                    indicator.style.borderColor = '#ccc';
+                    if (checkmark) checkmark.style.opacity = '0';
+                    toggleItem.style.background = 'transparent';
+                }
+            };
+            
+            // 更新 focus mode checkbox 状态和视觉样式
             if (focusCheckbox && typeof window.focusModeEnabled !== 'undefined') {
                 // "允许打断"按钮值与 focusModeEnabled 相反
-                focusCheckbox.checked = !window.focusModeEnabled;
+                const newChecked = !window.focusModeEnabled;
+                // 只在状态改变时更新，避免不必要的 DOM 操作
+                if (focusCheckbox.checked !== newChecked) {
+                    focusCheckbox.checked = newChecked;
+                    // 使用 requestAnimationFrame 确保 DOM 已更新后再更新样式
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(focusCheckbox);
+                    });
+                } else {
+                    // 即使状态相同，也确保视觉样式正确（处理概率性问题）
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(focusCheckbox);
+                    });
+                }
             }
+            
+            // 更新 proactive chat checkbox 状态和视觉样式
             if (proactiveChatCheckbox && typeof window.proactiveChatEnabled !== 'undefined') {
-                proactiveChatCheckbox.checked = window.proactiveChatEnabled;
+                const newChecked = window.proactiveChatEnabled;
+                // 只在状态改变时更新，避免不必要的 DOM 操作
+                if (proactiveChatCheckbox.checked !== newChecked) {
+                    proactiveChatCheckbox.checked = newChecked;
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(proactiveChatCheckbox);
+                    });
+                } else {
+                    // 即使状态相同，也确保视觉样式正确（处理概率性问题）
+                    requestAnimationFrame(() => {
+                        updateCheckboxStyle(proactiveChatCheckbox);
+                    });
+                }
             }
         }
         
