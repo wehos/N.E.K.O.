@@ -71,10 +71,30 @@ class Live2DManager {
             window.addEventListener('beforeunload', (e) => {
                 try {
                     if (!this._lastLoadedModelPath || !this.currentModel) return;
+                    
+                    // 验证位置和缩放值是否为有效的有限数值
+                    const posX = this.currentModel.x;
+                    const posY = this.currentModel.y;
+                    const scaleX = this.currentModel.scale ? this.currentModel.scale.x : 1;
+                    const scaleY = this.currentModel.scale ? this.currentModel.scale.y : 1;
+                    
+                    // 检查所有值是否为有限数值（排除 NaN、Infinity、-Infinity）
+                    if (!Number.isFinite(posX) || !Number.isFinite(posY) || 
+                        !Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+                        console.warn('模型位置或缩放值无效，跳过保存:', { posX, posY, scaleX, scaleY });
+                        return;
+                    }
+                    
+                    // 额外验证：缩放值应该为正数（避免保存0或负数缩放）
+                    if (scaleX <= 0 || scaleY <= 0) {
+                        console.warn('模型缩放值必须为正数，跳过保存:', { scaleX, scaleY });
+                        return;
+                    }
+                    
                     const payload = {
                         model_path: this._lastLoadedModelPath,
-                        position: { x: this.currentModel.x, y: this.currentModel.y },
-                        scale: { x: this.currentModel.scale ? this.currentModel.scale.x : 1, y: this.currentModel.scale ? this.currentModel.scale.y : 1 }
+                        position: { x: posX, y: posY },
+                        scale: { x: scaleX, y: scaleY }
                     };
                     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
                     // 使用 navigator.sendBeacon 保证在页面卸载时尽可能发送数据
@@ -167,6 +187,25 @@ class Live2DManager {
     // 保存用户偏好
     async saveUserPreferences(modelPath, position, scale) {
         try {
+            // 验证位置和缩放值是否为有效的有限数值
+            if (!position || typeof position !== 'object' || 
+                !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+                console.error('位置值无效:', position);
+                return false;
+            }
+            
+            if (!scale || typeof scale !== 'object' || 
+                !Number.isFinite(scale.x) || !Number.isFinite(scale.y)) {
+                console.error('缩放值无效:', scale);
+                return false;
+            }
+            
+            // 验证缩放值必须为正数
+            if (scale.x <= 0 || scale.y <= 0) {
+                console.error('缩放值必须为正数:', scale);
+                return false;
+            }
+            
             const preferences = {
                 model_path: modelPath,
                 position: position,
