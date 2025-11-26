@@ -259,6 +259,52 @@ class Live2DManager {
     getPIXIApp() {
         return this.pixi_app;
     }
+
+    // 复位模型位置和缩放到初始状态
+    resetModelPosition() {
+        if (!this.currentModel || !this.pixi_app) {
+            console.warn('无法复位：模型或PIXI应用未初始化');
+            return;
+        }
+
+        try {
+            // 根据移动端/桌面端重置到默认位置和缩放
+            if (isMobileWidth()) {
+                // 移动端默认设置
+                const scale = Math.min(
+                    0.5,
+                    window.innerHeight * 1.3 / 4000,
+                    window.innerWidth * 1.2 / 2000
+                );
+                this.currentModel.scale.set(scale);
+                this.currentModel.x = this.pixi_app.renderer.width * 0.5;
+                this.currentModel.y = this.pixi_app.renderer.height * 0.28;
+            } else {
+                // 桌面端默认设置（靠右下）
+                const scale = Math.min(
+                    0.5,
+                    (window.innerHeight * 0.75) / 7000,
+                    (window.innerWidth * 0.6) / 7000
+                );
+                this.currentModel.scale.set(scale);
+                this.currentModel.x = this.pixi_app.renderer.width * 0.92;
+                this.currentModel.y = this.pixi_app.renderer.height * 0.68;
+            }
+
+            console.log('模型位置已复位到初始状态');
+
+            // 保存复位后的位置（如果有模型路径）
+            if (this._lastLoadedModelPath) {
+                this.saveUserPreferences(
+                    this._lastLoadedModelPath,
+                    { x: this.currentModel.x, y: this.currentModel.y },
+                    { x: this.currentModel.scale.x, y: this.currentModel.scale.y }
+                );
+            }
+        } catch (error) {
+            console.error('复位模型位置时出错:', error);
+        }
+    }
 }
 
 // 导出
