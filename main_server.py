@@ -2371,29 +2371,49 @@ async def update_catgirl_name(request: Request):
         with open(new_file_path, 'r', encoding='utf-8') as f:
             file_content = json.load(f)
         
-        # 使用正则表达式进行安全的猫娘名称替换
-        import re
-        
-        # 创建安全的替换模式
-        # (?<![a-zA-Z0-9_]) - 前面不是字母数字下划线
-        # (?<![^\x00-\x7F]) - 前面不是非ASCII字符（如中文字符）
-        # (?![a-zA-Z0-9_]) - 后面不是字母数字下划线
-        # (?![^\x00-\x7F]) - 后面不是非ASCII字符（如中文字符）
-        # 这样确保只替换独立的词汇，不影响其他字符串
-        name_pattern = re.compile(rf'(?<![a-zA-Z0-9_])(?<![^\x00-\x7F]){re.escape(old_name)}(?![a-zA-Z0-9_])(?![^\x00-\x7F])')
-        
-        # 遍历所有消息，更新内容中的猫娘名称
+        # 遍历所有消息，仅在特定字段中更新猫娘名称
         for item in file_content:
-            if isinstance(item, dict) and 'data' in item and isinstance(item['data'], dict):
-                content = item['data'].get('content', '')
-                if isinstance(content, str):
-                    # 仅替换作为独立词汇的猫娘名称，避免误替换
-                    new_content = name_pattern.sub(new_name, content)
+            if isinstance(item, dict):
+                # 安全的方式：只在特定的字段中替换猫娘名称
+                # 避免在整个content中进行字符串替换
+                
+                # 检查角色名称相关字段
+                name_fields = ['speaker', 'author', 'name', 'character', 'role']
+                for field in name_fields:
+                    if field in item and isinstance(item[field], str) and old_name in item[field]:
+                        if item[field] == old_name:  # 完全匹配才替换
+                            item[field] = new_name
+                            logger.debug(f"更新角色名称字段 {field}: {old_name} -> {new_name}")
+                
+                # 如果item有data嵌套结构，也检查其中的name字段
+                if 'data' in item and isinstance(item['data'], dict):
+                    data = item['data']
+                    for field in name_fields:
+                        if field in data and isinstance(data[field], str) and old_name in data[field]:
+                            if data[field] == old_name:  # 完全匹配才替换
+                                data[field] = new_name
+                                logger.debug(f"更新data中角色名称字段 {field}: {old_name} -> {new_name}")
                     
-                    # 额外的安全检查：确保替换后内容有实际变化
-                    if new_content != content:
-                        item['data']['content'] = new_content
-                        logger.debug(f"在消息内容中更新猫娘名称: {old_name} -> {new_name}")
+                    # 对于content字段，使用更保守的方法 - 仅在明确标识为角色名称的地方替换
+                    if 'content' in data and isinstance(data['content'], str):
+                        content = data['content']
+                        # 检查是否是明确的角色发言格式，如"小白说："或"小白: "
+                        # 这种格式通常表示后面的内容是角色发言
+                        patterns = [
+                            f"{old_name}说：",  # 中文冒号
+                            f"{old_name}说:",   # 英文冒号  
+                            f"{old_name}:",     # 纯冒号
+                            f"{old_name}->",    # 箭头
+                            f"[{old_name}]",    # 方括号
+                        ]
+                        
+                        for pattern in patterns:
+                            if pattern in content:
+                                new_pattern = pattern.replace(old_name, new_name)
+                                content = content.replace(pattern, new_pattern)
+                                logger.debug(f"在消息内容中发现角色标识，更新: {pattern} -> {new_pattern}")
+                        
+                        data['content'] = content
         
         # 保存更新后的内容
         with open(new_file_path, 'w', encoding='utf-8') as f:
