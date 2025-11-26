@@ -135,7 +135,7 @@ class McpRouterClient:
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
-                "name": "N.E.K.O.-MCP-Client",
+                "name": "PROJECT-NEKO-MCP-Client",
                 "version": "1.0.0"
             }
         })

@@ -3148,7 +3148,7 @@ function init_app(){
             proactiveChatEnabled: currentProactive,
             focusModeEnabled: currentFocus
         };
-        localStorage.setItem('n.e.k.o._settings', JSON.stringify(settings));
+        localStorage.setItem('project_neko_settings', JSON.stringify(settings));
         
         // 同步回局部变量，保持一致性
         proactiveChatEnabled = currentProactive;
@@ -3161,7 +3161,7 @@ function init_app(){
     // 从localStorage加载设置
     function loadSettings() {
         try {
-            const saved = localStorage.getItem('n.e.k.o._settings');
+            const saved = localStorage.getItem('project_neko_settings');
             if (saved) {
                 const settings = JSON.parse(saved);
                 // 使用 ?? 运算符提供更好的默认值处理（避免将 false 误判为需要使用默认值）

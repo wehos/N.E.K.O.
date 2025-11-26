@@ -4959,7 +4959,7 @@ wheels = [
 ]
 
 [[package]]
-name = "N.E.K.O."
+name = "N.E.K.O"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
