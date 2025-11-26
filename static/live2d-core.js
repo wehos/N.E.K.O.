@@ -62,6 +62,36 @@ class Live2DManager {
         this._origUpdateParameters = null;
         this._origExpressionUpdateParameters = null;
         this._mouthTicker = null;
+        
+        // 记录最后一次加载模型的原始路径（用于关闭时保存偏好）
+        this._lastLoadedModelPath = null;
+
+        // 在窗口关闭/刷新时尝试保存当前模型位置（使用 sendBeacon 以增加成功率）
+        try {
+            window.addEventListener('beforeunload', (e) => {
+                try {
+                    if (!this._lastLoadedModelPath || !this.currentModel) return;
+                    const payload = {
+                        model_path: this._lastLoadedModelPath,
+                        position: { x: this.currentModel.x, y: this.currentModel.y },
+                        scale: { x: this.currentModel.scale ? this.currentModel.scale.x : 1, y: this.currentModel.scale ? this.currentModel.scale.y : 1 }
+                    };
+                    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                    // 使用 navigator.sendBeacon 保证在页面卸载时尽可能发送数据
+                    if (navigator && navigator.sendBeacon) {
+                        navigator.sendBeacon('/api/preferences', blob);
+                    } else {
+                        // 作为回退，发起同步 XMLHttpRequest（尽量少用）
+                        try {
+                            const xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/api/preferences', false); // false -> 同步
+                            xhr.setRequestHeader('Content-Type', 'application/json');
+                            xhr.send(JSON.stringify(payload));
+                        } catch (_) {}
+                    }
+                } catch (_) {}
+            });
+        } catch (_) {}
     }
 
     // 从 FileReferences 推导 EmotionMapping（用于兼容历史数据）

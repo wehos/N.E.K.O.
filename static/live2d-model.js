@@ -97,6 +97,9 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
 
             if (typeof urlString !== 'string') throw new TypeError('modelPath/url is not a string');
 
+            // 记录用于保存偏好的原始模型路径（供 beforeunload 使用）
+            try { this._lastLoadedModelPath = urlString; } catch (_) {}
+
             const cleanPath = urlString.split('#')[0].split('?')[0];
             const lastSlash = cleanPath.lastIndexOf('/');
             const rootDir = lastSlash >= 0 ? cleanPath.substring(0, lastSlash) : '/static';
@@ -215,6 +218,7 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                     const parts = rootDir.split('/').filter(Boolean);
                     this.modelName = parts.length > 0 ? parts[parts.length - 1] : null;
                     console.log('回退模型根路径解析:', { modelUrl: defaultModelPath, modelName: this.modelName, modelRootPath: this.modelRootPath });
+                    try { this._lastLoadedModelPath = defaultModelPath; } catch (_) {}
                 } catch (e) {
                     console.warn('解析回退模型根路径失败，将使用默认值', e);
                     this.modelRootPath = '/static';
