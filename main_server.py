@@ -1101,6 +1101,20 @@ async def set_current_catgirl(request: Request):
         return JSONResponse({'success': False, 'error': '指定的猫娘不存在'}, status_code=404)
     
     old_catgirl = characters.get('当前猫娘', '')
+    
+    # 检查当前角色是否有活跃的语音session
+    if old_catgirl and old_catgirl in session_manager:
+        mgr = session_manager[old_catgirl]
+        if mgr.is_active:
+            # 检查是否是语音模式（通过session类型判断）
+            from main_helper.omni_realtime_client import OmniRealtimeClient
+            is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
+            
+            if is_voice_mode:
+                return JSONResponse({
+                    'success': False, 
+                    'error': '语音状态下无法切换角色，请先停止语音对话后再切换'
+                }, status_code=400)
     characters['当前猫娘'] = catgirl_name
     _config_manager.save_characters(characters)
     # 自动重新加载配置
