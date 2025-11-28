@@ -25,6 +25,7 @@ class Live2DManager {
         this.emotionMapping = null; // { motions: {emotion: [string]}, expressions: {emotion: [string]} }
         this.fileReferences = null; // 保存原始 FileReferences（含 Motions/Expressions）
         this.currentEmotion = 'neutral';
+        this.currentExpressionFile = null; // 当前使用的表情文件（用于精确比较）
         this.pixi_app = null;
         this.isInitialized = false;
         this.motionTimer = null;

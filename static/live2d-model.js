@@ -10,8 +10,9 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
 
     // 移除当前模型
     if (this.currentModel) {
-        // 先清空常驻表情记录
+        // 先清空常驻表情记录和初始参数
         this.teardownPersistentExpressions();
+        this.initialParameters = {};
 
         // 尝试还原之前覆盖的 updateParameters，避免旧引用在新模型上报错
         try {
@@ -191,6 +192,9 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
         try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
         // 设置常驻表情（根据 EmotionMapping.expressions.常驻 或 FileReferences 前缀推导）
         await this.setupPersistentExpressions();
+
+        // 记录模型的初始参数（用于expression重置）
+        this.recordInitialParameters();
 
         // 调用回调函数
         if (this.onModelLoaded) {
