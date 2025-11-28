@@ -454,13 +454,13 @@ Live2DManager.prototype.clearEmotionEffects = function() {
         hasCleared = true;
     }
     
-    // 停止所有motion并重置所有参数到默认值
+    // 停止所有motion（但不重置expression参数）
     if (this.currentModel && this.currentModel.internalModel && this.currentModel.internalModel.motionManager) {
         try {
             // 使用官方API停止所有motion
             if (this.currentModel.internalModel.motionManager.stopAllMotions) {
                 this.currentModel.internalModel.motionManager.stopAllMotions();
-                console.log('已停止所有motion');
+                console.log('已停止所有motion，保留expression参数');
                 hasCleared = true;
             }
         } catch (motionError) {
@@ -468,59 +468,44 @@ Live2DManager.prototype.clearEmotionEffects = function() {
         }
     }
     
-    // 重置所有参数到默认值（关键步骤）
+    // 只重置明显的motion相关参数，保留expression相关参数
     if (this.currentModel && this.currentModel.internalModel && this.currentModel.internalModel.coreModel) {
         try {
             const coreModel = this.currentModel.internalModel.coreModel;
-            const paramCount = coreModel.getParameterCount();
             
-            console.log(`开始重置${paramCount}个参数到默认值...`);
+            // 只重置明显的motion相关参数，避免影响expression
+            const motionParams = [
+                'ParamAngleX', 'ParamAngleY', 'ParamAngleZ', // 角度参数
+                'ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ', // 身体角度
+                'ParamBreath', 'ParamBreath2', 'ParamBreath3', // 呼吸参数
+                'ParamLookAtX', 'ParamLookAtY', // 视线追踪
+                'ParamShake' // 震动参数
+            ];
             
-            // 遍历所有参数，将其重置为默认值
-            for (let i = 0; i < paramCount; i++) {
+            let resetCount = 0;
+            for (const paramId of motionParams) {
                 try {
-                    const paramId = coreModel.getParameterId(i);
-                    const defaultValue = coreModel.getParameterDefaultValueByIndex(i);
-                    
-                    // 跳过嘴巴相关参数（这些由口型同步控制）
-                    if (paramId === 'ParamMouthOpenY' || paramId === 'ParamO') {
-                        continue;
-                    }
-                    
-                    // 重置参数到默认值
-                    coreModel.setParameterValueByIndex(i, defaultValue);
+                    coreModel.setParameterValueById(paramId, 0);
+                    resetCount++;
                 } catch (e) {
-                    // 单个参数重置失败不影响其他参数
+                    // 参数不存在，忽略
                 }
             }
-            try {
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleX', 0);
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleY', 0);
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleZ', 0);
-                console.log('已使用备用方案重置角度参数');
-            } catch (e) {}
             
-            console.log('所有motion参数已重置到默认值');
+            console.log(`已重置${resetCount}个motion相关参数到默认值，expression参数已保留`);
         } catch (paramError) {
-            console.warn('重置参数失败，使用备用方案:', paramError);
-            // 备用方案：至少重置角度参数
-            try {
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleX', 0);
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleY', 0);
-                this.currentModel.internalModel.coreModel.setParameterValueById('ParamAngleZ', 0);
-                console.log('已使用备用方案重置角度参数');
-            } catch (e) {}
+            console.warn('重置motion参数失败:', paramError);
         }
     }
     
-    // 重新应用常驻表情（只保护常驻表情，不处理当前emotion的expression）
+    // 重新应用常驻表情（保护常驻expression不被影响）
     try {
         this.applyPersistentExpressionsNative();
     } catch (e) {
         console.warn('重新应用常驻表情失败:', e);
     }
     
-    console.log('motion效果清理完成，所有参数已重置，常驻表情已保护');
+    console.log('motion效果清理完成，motion参数已重置，expression参数已保留');
 };
 
 // 设置情感并播放对应的表情和动作
@@ -574,11 +559,8 @@ Live2DManager.prototype.setEmotion = async function(emotion) {
     try {
         console.log(`开始设置新情感: ${emotion}`);
         
-        // 清理之前的情感效果（包括定时器等）
+        // 清理之前的motion效果（按照注释保留expression）
         this.clearEmotionEffects();
-        
-        // 使用官方API清除expression到默认状态
-        this.clearExpression();
         
         this.currentEmotion = emotion;
         this.currentExpressionFile = targetExpressionFile;
