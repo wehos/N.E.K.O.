@@ -72,14 +72,11 @@ Live2DManager.prototype.clearExpression = function() {
             return;
         }
 
-        // 如果没有记录的初始参数，记录当前参数作为基准
+        // 检查初始参数是否存在，如果不存在则视为硬错误
         if (!this.initialParameters || Object.keys(this.initialParameters).length === 0) {
-            console.log('未找到初始参数记录，使用当前参数作为基准');
-            this.recordInitialParameters();
-            if (!this.initialParameters || Object.keys(this.initialParameters).length === 0) {
-                console.warn('无法记录参数，expression清除失败');
-                return;
-            }
+            console.error('严重错误：未找到初始参数记录！expression清除失败。');
+            console.error('请确保在模型加载完成后立即调用recordInitialParameters()初始化参数基准');
+            return;
         }
 
         // 尝试使用官方API停止expression（可选，不依赖其结果）
