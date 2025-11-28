@@ -531,6 +531,19 @@
             align-items: center;
         }
         
+        .filter-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            white-space: nowrap;
+            text-align: right;
+            padding-right: 5px;
+            min-width: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        
         /* 卡片容器样式 - tile视图 */
         .cards-container {
             display: grid;
@@ -882,12 +895,27 @@
         .pagination {
             display: flex;
             justify-content: center;
+            align-items: center;
             margin-top: 30px;
-            gap: 8px;
+            gap: 12px;
         }
         
         .pagination .btn {
-            min-width: 40px;
+            min-width: 80px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 12px;
+        }
+        
+        .pagination span {
+            display: flex;
+            align-items: center;
+            height: 36px;
+            min-width: 120px;
+            text-align: center;
+            padding: 0 8px;
         }
         
         /* 消息提示样式 */
@@ -1414,15 +1442,19 @@
                     <div class="filter-controls">
                     <div class="filter-group">
                         <div class="filter-label">搜索：</div>
-                        <input type="text" id="search-subscription" class="control-input" placeholder="搜索订阅内容...">
+                        <input type="text" id="search-subscription" class="control-input" placeholder="搜索订阅内容..." onkeyup="filterSubscriptions(this.value)">
                     </div>
                     <div class="filter-group">
                         <div class="filter-label">排序：</div>
-                        <select id="sort-subscription" class="control-select">
+                        <select id="sort-subscription" class="control-select" onchange="applySort(this.value)">
                             <option value="name_asc">名称（升序）</option>
                             <option value="name_desc">名称（降序）</option>
                             <option value="date_asc">订阅日期（升序）</option>
                             <option value="date_desc">订阅日期（降序）</option>
+                            <option value="size_asc">文件大小（升序）</option>
+                            <option value="size_desc">文件大小（降序）</option>
+                            <option value="update_asc">更新时间（升序）</option>
+                            <option value="update_desc">更新时间（降序）</option>
                         </select>
                     </div>
                     <div class="filter-group">
@@ -1441,9 +1473,9 @@
                     </div>
                     
                     <div class="pagination">
-                        <button class="btn btn-secondary" disabled>上一页</button>
-                        <span>第 1 页，共 0 页</span>
-                        <button class="btn btn-secondary" disabled>下一页</button>
+                        <button class="btn btn-secondary" onclick="goToPrevPage()" disabled>上一页</button>
+                        <span>第 1 页，共 1 页</span>
+                        <button class="btn btn-secondary" onclick="goToNextPage()" disabled>下一页</button>
                     </div>
                 </div>
                 </div>
@@ -2859,6 +2891,14 @@
             });
         }
         
+        // 分页相关变量
+        let allSubscriptions = []; // 存储所有订阅物品
+        let currentPage = 1;
+        let itemsPerPage = 10;
+        let totalPages = 1;
+        let currentSortField = 'timeAdded'; // 默认按添加时间排序
+        let currentSortOrder = 'desc'; // 默认降序
+
         // 加载订阅物品
         function loadSubscriptions() {
             const subscriptionsList = document.getElementById('subscriptions-list');
@@ -2879,86 +2919,275 @@
                         if (data.message) {
                             showMessage(data.message, 'error');
                         }
+                        updatePagination(); // 更新分页状态
                         return;
                     }
                     
-                    if (data.items.length === 0) {
-                        subscriptionsList.innerHTML = '<div class="empty-state"><p>您还没有订阅任何创意工坊物品</p></div>';
+                    // 保存所有订阅物品到全局变量
+                    allSubscriptions = data.items || [];
+                    
+                    // 应用排序（从下拉框获取排序方式）
+                    const sortSelect = document.getElementById('sort-subscription');
+                    if (sortSelect) {
+                        const [field, order] = sortSelect.value.split('_');
+                        sortSubscriptions(field, order);
                     } else {
-                        // 生成卡片HTML
-                        subscriptionsList.innerHTML = data.items.map(item => {
-                            // 格式化物品数据为前端所需格式
-                        // 确保publishedFileId转换为字符串，避免类型错误
-                        const formattedItem = {
-                            id: String(item.publishedFileId),
-                            name: item.title || `未知物品_${String(item.publishedFileId)}`,
-                            author: item.steamIDOwner ? String(item.steamIDOwner) : '未知作者', // 暂时使用SteamID作为作者名
-                            subscribedDate: item.timeAdded ? new Date(item.timeAdded * 1000).toLocaleDateString() : '未知日期',
-                            lastUpdated: item.timeUpdated ? new Date(item.timeUpdated * 1000).toLocaleDateString() : '未知日期',
-                            size: formatFileSize(item.fileSizeOnDisk || item.fileSize || 0),
-                            previewUrl: item.previewImageUrl || '../static/icons/Steam_icon_logo.png',
-                            state: item.state || {},
-                            // 添加安装路径信息
-                            installedFolder: item.installedFolder || '',
-                            description: item.description || '暂无描述'
-                        };
-                            
-                            // 确定状态类和文本
-                            let statusClass = 'status-subscribed';
-                            let statusText = '已订阅';
-                            
-                            if (formattedItem.state.downloading) {
-                                statusClass = 'status-downloading';
-                                statusText = '下载中';
-                            } else if (formattedItem.state.needsUpdate) {
-                                statusClass = 'status-needs-update';
-                                statusText = '需要更新';
-                            } else if (formattedItem.state.installed) {
-                                statusClass = 'status-installed';
-                                statusText = '已安装';
-                            }
-                             
-                            return `
-                                <div class="workshop-card">
-                                    <div class="card-header">
-                                        <img src="${formattedItem.installedFolder ? `/api/proxy-image?image_path=${encodeURIComponent(formattedItem.installedFolder + '/preview.png')}` : `/api/proxy-image?image_path=${encodeURIComponent(formattedItem.previewUrl)}`}" alt="${formattedItem.name}" class="card-image">
-                                        <div class="status-badge ${statusClass}">${statusText}</div>
-                                    </div>
-                                    <div class="card-content">
-                                        <h3 class="card-title">${formattedItem.name}</h3>
-                                        <div class="author-info">
-                                            <div class="author-avatar">${formattedItem.author.substring(0, 2).toUpperCase()}</div>
-                                            <span>作者: ${formattedItem.author}</span>
-                                        </div>
-                                        <div class="card-info-grid">
-                                            <div class="card-info-item"><span class="info-label">订阅日期:</span> <span class="info-value">${formattedItem.subscribedDate}</span></div>
-                                            <div class="card-info-item"><span class="info-label">上次更新:</span> <span class="info-value">${formattedItem.lastUpdated}</span></div>
-                                            <div class="card-info-item"><span class="info-label">大小:</span> <span class="info-value">${formattedItem.size}</span></div>
-                                        </div>
-                                        ${formattedItem.state && formattedItem.state.downloading && item.downloadProgress ? 
-                                            `<div class="download-progress">
-                                                <div class="progress-bar">
-                                                    <div class="progress-fill" style="width: ${item.downloadProgress.percentage}%">
-                                                        ${item.downloadProgress.percentage.toFixed(1)}%
-                                                    </div>
-                                                </div>
-                                            </div>` : ''
-                                        }
-                                        <div class="card-actions">
-                                            <button class="button button-primary" onclick="viewItemDetails('${formattedItem.id}')">查看详情</button>
-                                            <button class="button button-danger" onclick="unsubscribeItem('${formattedItem.id}', '${formattedItem.name}')">取消订阅</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join('');
+                        // 默认按日期降序排序
+                        sortSubscriptions('date', 'desc');
                     }
+                    
+                    // 计算总页数
+                    totalPages = Math.ceil(allSubscriptions.length / itemsPerPage);
+                    if (totalPages < 1) totalPages = 1;
+                    if (currentPage > totalPages) currentPage = totalPages;
+                    
+                    // 显示当前页的数据
+                    renderSubscriptionsPage();
+                    
+                    // 更新分页UI
+                    updatePagination();
                 })
                 .catch(error => {
                     console.error('获取订阅物品失败:', error);
                     subscriptionsList.innerHTML = `<div class="empty-state"><p>获取订阅物品失败: ${error.message}</p></div>`;
                     showMessage('无法连接到服务器，请检查网络连接', 'error');
                 });
+        }
+        
+        // 渲染当前页的订阅物品
+        function renderSubscriptionsPage() {
+            const subscriptionsList = document.getElementById('subscriptions-list');
+            
+            if (allSubscriptions.length === 0) {
+                subscriptionsList.innerHTML = '<div class="empty-state"><p>您还没有订阅任何创意工坊物品</p></div>';
+                return;
+            }
+            
+            // 计算当前页的数据范围
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const currentItems = allSubscriptions.slice(startIndex, endIndex);
+            
+            // 生成卡片HTML
+            subscriptionsList.innerHTML = currentItems.map(item => {
+                // 格式化物品数据为前端所需格式
+                // 确保publishedFileId转换为字符串，避免类型错误
+                const formattedItem = {
+                    id: String(item.publishedFileId),
+                    name: item.title || `未知物品_${String(item.publishedFileId)}`,
+                    author: item.steamIDOwner ? String(item.steamIDOwner) : '未知作者', // 暂时使用SteamID作为作者名
+                    subscribedDate: item.timeAdded ? new Date(item.timeAdded * 1000).toLocaleDateString() : '未知日期',
+                    lastUpdated: item.timeUpdated ? new Date(item.timeUpdated * 1000).toLocaleDateString() : '未知日期',
+                    size: formatFileSize(item.fileSizeOnDisk || item.fileSize || 0),
+                    previewUrl: item.previewImageUrl || '../static/icons/Steam_icon_logo.png',
+                    state: item.state || {},
+                    // 添加安装路径信息
+                    installedFolder: item.installedFolder || '',
+                    description: item.description || '暂无描述',
+                    timeAdded: item.timeAdded || 0,
+                    fileSize: item.fileSizeOnDisk || item.fileSize || 0
+                };
+                    
+                // 确定状态类和文本
+                let statusClass = 'status-subscribed';
+                let statusText = '已订阅';
+                
+                if (formattedItem.state.downloading) {
+                    statusClass = 'status-downloading';
+                    statusText = '下载中';
+                } else if (formattedItem.state.needsUpdate) {
+                    statusClass = 'status-needs-update';
+                    statusText = '需要更新';
+                } else if (formattedItem.state.installed) {
+                    statusClass = 'status-installed';
+                    statusText = '已安装';
+                }
+                  
+                return `
+                    <div class="workshop-card">
+                        <div class="card-header">
+                            <img src="${formattedItem.installedFolder ? `/api/proxy-image?image_path=${encodeURIComponent(formattedItem.installedFolder + '/preview.png')}` : `/api/proxy-image?image_path=${encodeURIComponent(formattedItem.previewUrl)}`}" alt="${formattedItem.name}" class="card-image">
+                            <div class="status-badge ${statusClass}">${statusText}</div>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="card-title">${formattedItem.name}</h3>
+                            <div class="author-info">
+                                <div class="author-avatar">${formattedItem.author.substring(0, 2).toUpperCase()}</div>
+                                <span>作者: ${formattedItem.author}</span>
+                            </div>
+                            <div class="card-info-grid">
+                                <div class="card-info-item"><span class="info-label">订阅日期:</span> <span class="info-value">${formattedItem.subscribedDate}</span></div>
+                                <div class="card-info-item"><span class="info-label">上次更新:</span> <span class="info-value">${formattedItem.lastUpdated}</span></div>
+                                <div class="card-info-item"><span class="info-label">大小:</span> <span class="info-value">${formattedItem.size}</span></div>
+                            </div>
+                            ${formattedItem.state && formattedItem.state.downloading && item.downloadProgress ? 
+                                `<div class="download-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" style="width: ${item.downloadProgress.percentage}%">
+                                            ${item.downloadProgress.percentage.toFixed(1)}%
+                                        </div>
+                                    </div>
+                                </div>` : ''
+                            }
+                            <div class="card-actions">
+                                     <!-- 查看详情下次再加，一时半会儿搞不定 -->
+                                <button class="button button-danger" onclick="unsubscribeItem('${formattedItem.id}', '${formattedItem.name}')">取消订阅</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // 更新分页控件
+        function updatePagination() {
+            const pagination = document.querySelector('.pagination');
+            if (!pagination) return;
+            
+            const prevBtn = pagination.querySelector('button:first-child');
+            const nextBtn = pagination.querySelector('button:last-child');
+            const pageInfo = pagination.querySelector('span');
+            
+            // 更新页码信息
+            if (pageInfo) {
+                pageInfo.textContent = `第 ${currentPage} 页，共 ${totalPages} 页`;
+            }
+            
+            // 更新上一页按钮状态
+            if (prevBtn) {
+                prevBtn.disabled = currentPage <= 1;
+            }
+            
+            // 更新下一页按钮状态
+            if (nextBtn) {
+                nextBtn.disabled = currentPage >= totalPages;
+            }
+        }
+        
+        // 前往上一页
+        function goToPrevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderSubscriptionsPage();
+                updatePagination();
+            }
+        }
+        
+        // 前往下一页
+        function goToNextPage() {
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderSubscriptionsPage();
+                updatePagination();
+            }
+        }
+        
+        // 排序订阅物品
+        function sortSubscriptions(field, order) {
+            if (allSubscriptions.length <= 1) return;
+            
+            allSubscriptions.sort((a, b) => {
+                let aValue, bValue;
+                
+                // 根据不同字段获取对应的值
+                switch(field) {
+                    case 'name':
+                        aValue = (a.title || String(a.publishedFileId || '')).toLowerCase();
+                        bValue = (b.title || String(b.publishedFileId || '')).toLowerCase();
+                        break;
+                    case 'date':
+                        aValue = a.timeAdded || 0;
+                        bValue = b.timeAdded || 0;
+                        break;
+                    case 'size':
+                        aValue = a.fileSizeOnDisk || a.fileSize || 0;
+                        bValue = b.fileSizeOnDisk || b.fileSize || 0;
+                        break;
+                    case 'update':
+                        aValue = a.timeUpdated || 0;
+                        bValue = b.timeUpdated || 0;
+                        break;
+                    default:
+                        // 默认按名称排序
+                        aValue = (a.title || String(a.publishedFileId || '')).toLowerCase();
+                        bValue = (b.title || String(b.publishedFileId || '')).toLowerCase();
+                }
+                
+                // 处理空值
+                if (aValue === undefined || aValue === null) aValue = '';
+                if (bValue === undefined || bValue === null) bValue = '';
+                
+                // 字符串比较
+                if (typeof aValue === 'string') {
+                    return order === 'asc' ? 
+                        aValue.localeCompare(bValue) : 
+                        bValue.localeCompare(aValue);
+                }
+                // 数字比较
+                return order === 'asc' ? 
+                    (aValue - bValue) : 
+                    (bValue - aValue);
+            });
+        }
+        
+        // 应用排序
+        function applySort(sortValue) {
+            // 解析排序值
+            const [field, order] = sortValue.split('_');
+            
+            // 重置到第一页
+            currentPage = 1;
+            
+            // 应用排序
+            sortSubscriptions(field, order);
+            
+            // 重新渲染页面
+            renderSubscriptionsPage();
+            
+            // 更新分页
+            updatePagination();
+        }
+        
+        // 过滤订阅物品
+        function filterSubscriptions(searchTerm) {
+            // 简单实现过滤功能
+            searchTerm = searchTerm.toLowerCase().trim();
+            
+            // 保存原始数据
+            if (window.originalSubscriptions === undefined) {
+                window.originalSubscriptions = [...allSubscriptions];
+            }
+            
+            // 如果搜索词为空，恢复原始数据
+            if (!searchTerm) {
+                if (window.originalSubscriptions) {
+                    allSubscriptions = [...window.originalSubscriptions];
+                }
+                // 重新应用当前排序
+                const sortSelect = document.getElementById('sort-subscription');
+                if (sortSelect) {
+                    applySort(sortSelect.value);
+                }
+                return;
+            }
+            
+            // 过滤物品
+            let itemsToFilter = window.originalSubscriptions || [...allSubscriptions];
+            const filteredItems = itemsToFilter.filter(item => {
+                const title = (item.title || '').toLowerCase();
+                return title.includes(searchTerm);
+            });
+            
+            allSubscriptions = filteredItems;
+            
+            // 重新计算分页
+            totalPages = Math.ceil(allSubscriptions.length / itemsPerPage);
+            if (totalPages < 1) totalPages = 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+            
+            // 渲染过滤后的结果
+            renderSubscriptionsPage();
+            updatePagination();
         }
         
         // 格式化文件大小
