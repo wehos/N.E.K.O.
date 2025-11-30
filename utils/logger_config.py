@@ -383,7 +383,7 @@ class EnhancedLogger:
         self._logger.exception(msg, *args, **kwargs)
 
 
-def setup_logging(app_name=None, service_name=None, log_level=None):
+def setup_logging(app_name=None, service_name=None, log_level=None, silent=False):
     """
     便捷函数：设置日志配置
     
@@ -391,6 +391,7 @@ def setup_logging(app_name=None, service_name=None, log_level=None):
         app_name: 应用名称，默认使用配置中的 APP_NAME（用于确定日志目录）
         service_name: 服务名称，用于区分不同服务的日志文件（如Main、Memory、Agent）
         log_level: 日志级别
+        silent: 静默模式，不打印初始化消息（用于子进程避免重复输出）
         
     Returns:
         tuple: (增强的logger实例, 日志配置对象)
@@ -405,12 +406,13 @@ def setup_logging(app_name=None, service_name=None, log_level=None):
     # 包装为增强logger
     logger = EnhancedLogger(base_logger)
     
-    # 记录日志配置信息
-    service_info = f"{service_name}" if service_name else config.app_name
-    logger.info(f"=== {service_info} 日志系统已初始化 ===")
-    logger.info(f"日志目录: {config.get_log_directory_path()}")
-    logger.info(f"日志级别: {logging.getLevelName(config.log_level)}")
-    logger.info("=" * 50)
+    # 记录日志配置信息（子进程静默模式下跳过）
+    if not silent:
+        service_info = f"{service_name}" if service_name else config.app_name
+        logger.info(f"=== {service_info} 日志系统已初始化 ===")
+        logger.info(f"日志目录: {config.get_log_directory_path()}")
+        logger.info(f"日志级别: {logging.getLevelName(config.log_level)}")
+        logger.info("=" * 50)
     
     return logger, config
 

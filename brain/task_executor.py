@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIConnectionError, InternalServerError, RateLimitError
 from config import MODELS_WITH_EXTRA_BODY
 from utils.config_manager import get_config_manager
 from .mcp_client import McpRouterClient, McpToolCatalog
@@ -152,45 +152,58 @@ OUTPUT FORMAT (strict JSON):
 
         user_prompt = f"Conversation:\n{conversation}"
         
-        try:
-            client = self._get_client()
-            model = self._get_model()
-            
-            request_params = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0,
-                "max_tokens": 600
-            }
-            
-            if model in MODELS_WITH_EXTRA_BODY:
-                request_params["extra_body"] = {"enable_thinking": False}
-            
-            response = await client.chat.completions.create(**request_params)
-            text = response.choices[0].message.content.strip()
-            
-            logger.debug(f"[MCP Assessment] Raw response: {text[:200]}...")
-            
-            # 解析 JSON
-            if text.startswith("```"):
-                text = text.replace("```json", "").replace("```", "").strip()
-            decision = json.loads(text)
-            
-            return McpDecision(
-                has_task=decision.get('has_task', False),
-                can_execute=decision.get('can_execute', False),
-                task_description=decision.get('task_description', ''),
-                tool_name=decision.get('tool_name'),
-                tool_args=decision.get('tool_args'),
-                reason=decision.get('reason', '')
-            )
-            
-        except Exception as e:
-            logger.error(f"[MCP Assessment] Failed: {e}")
-            return McpDecision(has_task=False, can_execute=False, reason=f"Assessment error: {e}")
+        # Retry策略：重试2次，间隔1秒、2秒
+        max_retries = 3
+        retry_delays = [1, 2]
+        
+        for attempt in range(max_retries):
+            try:
+                client = self._get_client()
+                model = self._get_model()
+                
+                request_params = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 600
+                }
+                
+                if model in MODELS_WITH_EXTRA_BODY:
+                    request_params["extra_body"] = {"enable_thinking": False}
+                
+                response = await client.chat.completions.create(**request_params)
+                text = response.choices[0].message.content.strip()
+                
+                logger.debug(f"[MCP Assessment] Raw response: {text[:200]}...")
+                
+                # 解析 JSON
+                if text.startswith("```"):
+                    text = text.replace("```json", "").replace("```", "").strip()
+                decision = json.loads(text)
+                
+                return McpDecision(
+                    has_task=decision.get('has_task', False),
+                    can_execute=decision.get('can_execute', False),
+                    task_description=decision.get('task_description', ''),
+                    tool_name=decision.get('tool_name'),
+                    tool_args=decision.get('tool_args'),
+                    reason=decision.get('reason', '')
+                )
+                
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(f"[MCP Assessment] 调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"[MCP Assessment] Failed after {max_retries} attempts: {e}")
+                    return McpDecision(has_task=False, can_execute=False, reason=f"Assessment error after {max_retries} attempts: {e}")
+            except Exception as e:
+                logger.error(f"[MCP Assessment] Failed: {e}")
+                return McpDecision(has_task=False, can_execute=False, reason=f"Assessment error: {e}")
     
     async def _assess_computer_use(
         self, 
@@ -232,43 +245,56 @@ OUTPUT FORMAT (strict JSON):
 
         user_prompt = f"Conversation:\n{conversation}"
         
-        try:
-            client = self._get_client()
-            model = self._get_model()
-            
-            request_params = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0,
-                "max_tokens": 400
-            }
-            
-            if model in MODELS_WITH_EXTRA_BODY:
-                request_params["extra_body"] = {"enable_thinking": False}
-            
-            response = await client.chat.completions.create(**request_params)
-            text = response.choices[0].message.content.strip()
-            
-            logger.debug(f"[ComputerUse Assessment] Raw response: {text[:200]}...")
-            
-            # 解析 JSON
-            if text.startswith("```"):
-                text = text.replace("```json", "").replace("```", "").strip()
-            decision = json.loads(text)
-            
-            return ComputerUseDecision(
-                has_task=decision.get('has_task', False),
-                can_execute=decision.get('can_execute', False),
-                task_description=decision.get('task_description', ''),
-                reason=decision.get('reason', '')
-            )
-            
-        except Exception as e:
-            logger.error(f"[ComputerUse Assessment] Failed: {e}")
-            return ComputerUseDecision(has_task=False, can_execute=False, reason=f"Assessment error: {e}")
+        # Retry策略：重试2次，间隔1秒、2秒
+        max_retries = 3
+        retry_delays = [1, 2]
+        
+        for attempt in range(max_retries):
+            try:
+                client = self._get_client()
+                model = self._get_model()
+                
+                request_params = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 400
+                }
+                
+                if model in MODELS_WITH_EXTRA_BODY:
+                    request_params["extra_body"] = {"enable_thinking": False}
+                
+                response = await client.chat.completions.create(**request_params)
+                text = response.choices[0].message.content.strip()
+                
+                logger.debug(f"[ComputerUse Assessment] Raw response: {text[:200]}...")
+                
+                # 解析 JSON
+                if text.startswith("```"):
+                    text = text.replace("```json", "").replace("```", "").strip()
+                decision = json.loads(text)
+                
+                return ComputerUseDecision(
+                    has_task=decision.get('has_task', False),
+                    can_execute=decision.get('can_execute', False),
+                    task_description=decision.get('task_description', ''),
+                    reason=decision.get('reason', '')
+                )
+                
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(f"[ComputerUse Assessment] 调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"[ComputerUse Assessment] Failed after {max_retries} attempts: {e}")
+                    return ComputerUseDecision(has_task=False, can_execute=False, reason=f"Assessment error after {max_retries} attempts: {e}")
+            except Exception as e:
+                logger.error(f"[ComputerUse Assessment] Failed: {e}")
+                return ComputerUseDecision(has_task=False, can_execute=False, reason=f"Assessment error: {e}")
     
     async def analyze_and_execute(
         self, 

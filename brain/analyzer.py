@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 import logging
-from openai import AsyncOpenAI
+import asyncio
+from openai import AsyncOpenAI, APIConnectionError, InternalServerError, RateLimitError
 from config import MODELS_WITH_EXTRA_BODY
 from utils.config_manager import get_config_manager
 
@@ -39,32 +40,46 @@ class ConversationAnalyzer:
         
         prompt = self._build_prompt(messages)
         
-        try:
-            # 使用与 emotion_analysis 相同的调用方式
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-            
-            request_params = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a precise task intent extractor."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0,
-                "max_tokens": 500
-            }
-            
-            # 只有在需要时才添加 extra_body
-            if model in MODELS_WITH_EXTRA_BODY:
-                request_params["extra_body"] = {"enable_thinking": False}
-            
-            response = await client.chat.completions.create(**request_params)
-            text = response.choices[0].message.content.strip()
-            
-            logger.debug(f"[Analyzer] Raw response: {text[:200]}...")
-            
-        except Exception as e:
-            logger.error(f"[Analyzer] LLM调用失败: {e}")
-            return {"tasks": [], "reason": f"LLM error: {e}"}
+        # Retry策略：重试2次，每次间隔1秒
+        max_retries = 3
+        retry_delays = [1, 1]  # 第1次重试等1秒，第2次重试等1秒
+        
+        for attempt in range(max_retries):
+            try:
+                # 使用与 emotion_analysis 相同的调用方式
+                client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+                
+                request_params = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "You are a precise task intent extractor."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 500
+                }
+                
+                # 只有在需要时才添加 extra_body
+                if model in MODELS_WITH_EXTRA_BODY:
+                    request_params["extra_body"] = {"enable_thinking": False}
+                
+                response = await client.chat.completions.create(**request_params)
+                text = response.choices[0].message.content.strip()
+                
+                logger.debug(f"[Analyzer] Raw response: {text[:200]}...")
+                break  # 成功则退出重试循环
+                
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(f"[Analyzer] LLM调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"[Analyzer] LLM调用失败，已达到最大重试次数: {e}")
+                    return {"tasks": [], "reason": f"LLM error after {max_retries} attempts: {e}"}
+            except Exception as e:
+                logger.error(f"[Analyzer] LLM调用失败: {e}")
+                return {"tasks": [], "reason": f"LLM error: {e}"}
         
         try:
             if text.startswith("```"):

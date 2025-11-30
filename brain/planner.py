@@ -1,8 +1,11 @@
 import asyncio
 import logging
+import json
+import uuid
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from langchain_openai import ChatOpenAI
+from openai import APIConnectionError, InternalServerError, RateLimitError
 from config import MODELS_WITH_EXTRA_BODY
 from utils.config_manager import get_config_manager
 from .mcp_client import McpRouterClient, McpToolCatalog
@@ -67,19 +70,39 @@ class TaskPlanner:
             " steps should be granular tool queries for the MCP processor."
         )
         mcp_user = f"Capabilities:\n{tools_brief}\n\nTask: {query}"
-        llm = self._get_llm()
-        resp1 = await llm.ainvoke([
-            {"role": "system", "content": mcp_system},
-            {"role": "user", "content": mcp_user},
-        ])
-        text1 = resp1.content.strip()
-        import json, uuid
-        try:
-            if text1.startswith("```"):
-                text1 = text1.replace("```json", "").replace("```", "").strip()
-            mcp = json.loads(text1)
-        except Exception:
-            mcp = {"can_execute": False, "reason": "LLM parse error", "server_id": None, "steps": []}
+        
+        # Retry策略：重试2次，间隔1秒、2秒
+        max_retries = 3
+        retry_delays = [1, 2]
+        mcp = {"can_execute": False, "reason": "LLM call failed", "server_id": None, "steps": []}
+        
+        for attempt in range(max_retries):
+            try:
+                llm = self._get_llm()
+                resp1 = await llm.ainvoke([
+                    {"role": "system", "content": mcp_system},
+                    {"role": "user", "content": mcp_user},
+                ])
+                text1 = resp1.content.strip()
+                try:
+                    if text1.startswith("```"):
+                        text1 = text1.replace("```json", "").replace("```", "").strip()
+                    mcp = json.loads(text1)
+                except Exception:
+                    mcp = {"can_execute": False, "reason": "LLM parse error", "server_id": None, "steps": []}
+                break  # 成功则退出重试循环
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(f"[Planner MCP] LLM调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"[Planner MCP] LLM调用失败，已达到最大重试次数: {e}")
+                    mcp = {"can_execute": False, "reason": f"LLM error after {max_retries} attempts: {e}", "server_id": None, "steps": []}
+            except Exception as e:
+                logger.error(f"[Planner MCP] LLM调用失败: {e}")
+                mcp = {"can_execute": False, "reason": f"LLM error: {e}", "server_id": None, "steps": []}
+                break
         
         # Log MCP decision
         if mcp.get('can_execute'):
@@ -106,17 +129,36 @@ class TaskPlanner:
                     " {use_computer: bool, reason: string}"
                 )
                 cu_user = f"Task: {query}"
-                resp2 = await llm.ainvoke([
-                    {"role": "system", "content": cu_system},
-                    {"role": "user", "content": cu_user},
-                ])
-                text2 = resp2.content.strip()
-                try:
-                    if text2.startswith("```"):
-                        text2 = text2.replace("```json", "").replace("```", "").strip()
-                    cu_decision = json.loads(text2)
-                except Exception:
-                    cu_decision = {"use_computer": False, "reason": "LLM parse error"}
+                
+                # Retry策略：重试2次，间隔1秒、2秒
+                cu_decision = {"use_computer": False, "reason": "LLM call failed"}
+                for attempt in range(max_retries):
+                    try:
+                        llm = self._get_llm()
+                        resp2 = await llm.ainvoke([
+                            {"role": "system", "content": cu_system},
+                            {"role": "user", "content": cu_user},
+                        ])
+                        text2 = resp2.content.strip()
+                        try:
+                            if text2.startswith("```"):
+                                text2 = text2.replace("```json", "").replace("```", "").strip()
+                            cu_decision = json.loads(text2)
+                        except Exception:
+                            cu_decision = {"use_computer": False, "reason": "LLM parse error"}
+                        break  # 成功则退出重试循环
+                    except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delays[attempt]
+                            logger.warning(f"[Planner ComputerUse] LLM调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            logger.error(f"[Planner ComputerUse] LLM调用失败，已达到最大重试次数: {e}")
+                            cu_decision = {"use_computer": False, "reason": f"LLM error after {max_retries} attempts: {e}"}
+                    except Exception as e:
+                        logger.error(f"[Planner ComputerUse] LLM调用失败: {e}")
+                        cu_decision = {"use_computer": False, "reason": f"LLM error: {e}"}
+                        break
                 
                 # Log Computer Use decision
                 if cu_decision.get('use_computer'):

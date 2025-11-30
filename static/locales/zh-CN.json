@@ -62,7 +62,7 @@
     "localModPathConfig": "本地mod路径配置",
     "localModFolder": "本地mod文件夹路径",
     "defaultPathHint": "未指定扫描路径时将使用此默认路径",
-    "defaultPathExample": "提示：默认路径通常在 我的文档/N.E.K.O./live2d",
+    "defaultPathExample": "提示：默认路径通常在 我的文档/N.E.K.O/live2d",
     "loadConfig": "加载当前配置",
     "saveConfig": "保存配置",
     "emptyStateHint": "请输入并扫描一个包含本地文件的文件夹",

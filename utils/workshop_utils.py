@@ -3,13 +3,14 @@
 创意工坊路径管理工具模块
 用于处理创意工坊路径的获取、配置和管理
 所有配置路径统一从 config_manager 获取
+
+依赖层次: utils层 -> config层 (单向依赖，不依赖main层)
 """
 
 import os
-import asyncio
 import pathlib
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, List, Dict, Any
 
 # 初始化日志记录器
 logger = logging.getLogger(__name__)
@@ -71,54 +72,63 @@ def ensure_workshop_folder_exists(folder_path: Optional[str] = None) -> bool:
         return False
 
 
-def get_workshop_root(globals_dict: Optional[Dict[str, Any]] = None) -> str:
+def extract_workshop_root_from_items(items: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    从创意工坊物品列表中提取根目录路径
+    
+    这是一个纯函数，不依赖任何外部状态或模块。
+    由上层（main_server）获取物品列表后传入。
+    
+    Args:
+        items: 创意工坊物品列表，每个物品包含 installedFolder 字段
+        
+    Returns:
+        str | None: 创意工坊根目录路径，如果无法提取则返回None
+    """
+    if not items:
+        logger.warning("未找到任何订阅的创意工坊物品")
+        return None
+    
+    first_item = items[0]
+    installed_folder = first_item.get('installedFolder')
+    
+    if not installed_folder:
+        logger.warning("第一个创意工坊物品没有安装目录")
+        return None
+    
+    logger.info(f"成功获取第一个创意工坊物品的安装目录: {installed_folder}")
+    
+    p = pathlib.Path(installed_folder)
+    # 创意工坊根目录是物品安装目录的父目录
+    if p.parent.exists():
+        return str(p.parent)
+    else:
+        logger.warning(f"计算得到的创意工坊根目录不存在: {p.parent}")
+        return None
+
+
+def get_workshop_root(subscribed_items: Optional[List[Dict[str, Any]]] = None) -> str:
     """
     获取创意工坊根目录路径，并将路径保存到配置文件中
     
+    设计原则：
+    - 此函数不依赖 main_server 层
+    - 上层负责获取 subscribed_items 并传入
+    - 如果未传入物品列表，则仅使用配置中的路径
+    
     Args:
-        globals_dict: 全局变量字典，用于访问get_subscribed_workshop_items函数
+        subscribed_items: 已获取的创意工坊订阅物品列表（由上层传入）
         
     Returns:
         str: 创意工坊根目录路径
     """
-    # 如果没有提供globals_dict，使用当前模块的globals
-    if globals_dict is None:
-        globals_dict = globals()
-    
     workshop_path = None
     
-    try:
-        # 尝试获取get_subscribed_workshop_items函数引用
-        subscribed_items_func = globals_dict.get('get_subscribed_workshop_items')
-        if subscribed_items_func:
-            # 使用asyncio.run()来运行异步函数
-            workshop_items_result = asyncio.run(subscribed_items_func())
-            if isinstance(workshop_items_result, dict) and workshop_items_result.get('success', False):
-                items = workshop_items_result.get('items', [])
-                if items:
-                    first_item = items[0]
-                    WORKSHOP_PATH_FIRST = first_item.get('installedFolder')
-                    if WORKSHOP_PATH_FIRST:
-                        logger.info(f"成功获取第一个创意工坊物品的安装目录: {WORKSHOP_PATH_FIRST}")
-                        
-                        p = pathlib.Path(WORKSHOP_PATH_FIRST)
-                        # 确保目录存在
-                        if p.parent.exists():
-                            workshop_path = str(p.parent)
-                        else:
-                            logger.warning(f"计算得到的创意工坊根目录不存在: {p.parent}")
-                    else:
-                        logger.warning("第一个创意工坊物品没有安装目录")
-                else:
-                    logger.warning("未找到任何订阅的创意工坊物品")
-            else:
-                logger.error("获取订阅的创意工坊物品失败")
-        else:
-            logger.warning("get_subscribed_workshop_items函数尚未定义，使用默认路径")
-    except Exception as e:
-        logger.error(f"获取创意工坊物品列表时出错: {e}")
+    # 如果提供了物品列表，尝试从中提取根目录
+    if subscribed_items:
+        workshop_path = extract_workshop_root_from_items(subscribed_items)
     
-    # 如果未能从创意工坊获取路径，使用get_workshop_path获取配置中的路径
+    # 如果未能从物品列表获取路径，使用配置中的路径
     if not workshop_path:
         workshop_path = get_workshop_path()
         logger.info(f"使用配置中的创意工坊路径: {workshop_path}")

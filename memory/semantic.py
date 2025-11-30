@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from config.prompts_sys import semantic_manager_prompt
 import json
 import asyncio
-from openai import RateLimitError
+from openai import APIConnectionError, InternalServerError, RateLimitError
 
 class SemanticMemory:
     def __init__(self, recent_history_manager: CompressedRecentHistoryManager, persist_directory=None):
@@ -66,14 +66,14 @@ class SemanticMemory:
             try:
                 reranker = self._get_reranker()
                 response = await reranker.ainvoke(prompt)
-            except RateLimitError as e:
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
                 retries += 1
                 if retries >= max_retries:
                     print(f'❌ Rerank query失败，已达到最大重试次数: {e}')
                     return []
                 # 指数退避: 1, 2, 4 秒
                 wait_time = 2 ** (retries - 1)
-                print(f'⚠️ 遇到429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
+                print(f'⚠️ 遇到网络或429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
                 await asyncio.sleep(wait_time)
                 continue
             except Exception as e:

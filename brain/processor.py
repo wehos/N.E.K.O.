@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 import asyncio
 import logging
 from langchain_openai import ChatOpenAI
+from openai import APIConnectionError, InternalServerError, RateLimitError
 from config import MODELS_WITH_EXTRA_BODY
 from utils.config_manager import get_config_manager
 from .mcp_client import McpRouterClient, McpToolCatalog
@@ -43,12 +44,32 @@ class Processor:
             " For tool_calls, be specific about which tools from the server would be used (e.g., ['save_memory', 'retrieve_memory'])."
         )
         user = f"Capabilities:\n{tools_brief}\n\nTask: {query}"
-        llm = self._get_llm()
-        resp = await llm.ainvoke([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ])
-        text = resp.content.strip()
+        
+        # Retry策略：重试2次，间隔1秒、2秒
+        max_retries = 3
+        retry_delays = [1, 2]
+        text = ""
+        
+        for attempt in range(max_retries):
+            try:
+                llm = self._get_llm()
+                resp = await llm.ainvoke([
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ])
+                text = resp.content.strip()
+                break  # 成功则退出重试循环
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(f"[MCP] LLM调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"[MCP] LLM调用失败，已达到最大重试次数: {e}")
+                    return {"can_execute": False, "reason": f"LLM error after {max_retries} attempts: {e}"}
+            except Exception as e:
+                logger.error(f"[MCP] LLM调用失败: {e}")
+                return {"can_execute": False, "reason": f"LLM error: {e}"}
         
         # Log raw LLM response for debugging
         logger.info(f"[MCP] Raw LLM response: {text}")

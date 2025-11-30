@@ -7,7 +7,7 @@ import json
 import os
 import asyncio
 import logging
-from openai import RateLimitError
+from openai import APIConnectionError, InternalServerError, RateLimitError
 
 from config.prompts_sys import recent_history_manager_prompt, detailed_recent_history_manager_prompt, further_summarize_prompt, history_review_prompt
 
@@ -184,14 +184,14 @@ class CompressedRecentHistoryManager:
                 else:
                     print('💥 摘要failed: ', response_content)
                     retries += 1
-            except RateLimitError as e:
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
                 retries += 1
                 if retries >= max_retries:
                     print(f'❌ 摘要模型失败，已达到最大重试次数: {e}')
                     break
                 # 指数退避: 1, 2, 4 秒
                 wait_time = 2 ** (retries - 1)
-                print(f'⚠️ 遇到429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
+                print(f'⚠️ 遇到网络或429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 print(f'❌ 摘要模型失败：{e}')
@@ -221,14 +221,14 @@ class CompressedRecentHistoryManager:
                 else:
                     print('💥 第二轮摘要failed: ', response_content)
                     retries += 1
-            except RateLimitError as e:
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
                 retries += 1
                 if retries >= max_retries:
                     print(f'❌ 第二轮摘要模型失败，已达到最大重试次数: {e}')
                     return None
                 # 指数退避: 1, 2, 4 秒
                 wait_time = 2 ** (retries - 1)
-                print(f'⚠️ 遇到429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
+                print(f'⚠️ 遇到网络或429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 print(f'❌ 第二轮摘要模型失败：{e}')
@@ -402,14 +402,14 @@ class CompressedRecentHistoryManager:
                     print(f"❌ 审阅响应格式错误：{response_content}")
                     return False
                     
-            except RateLimitError as e:
+            except (APIConnectionError, InternalServerError, RateLimitError) as e:
                 retries += 1
                 if retries >= max_retries:
                     print(f'❌ 记忆整理失败，已达到最大重试次数: {e}')
                     return False
                 # 指数退避: 1, 2, 4 秒
                 wait_time = 2 ** (retries - 1)
-                print(f'⚠️ 遇到429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
+                print(f'⚠️ 遇到网络或429错误，等待 {wait_time} 秒后重试 (第 {retries}/{max_retries} 次)')
                 await asyncio.sleep(wait_time)
                 # 检查是否被取消
                 if cancel_event and cancel_event.is_set():

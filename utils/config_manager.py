@@ -41,6 +41,8 @@ class ConfigManager:
             app_name: 应用名称，默认使用配置中的 APP_NAME
         """
         self.app_name = app_name if app_name is not None else APP_NAME
+        # 检测是否在子进程中，子进程静默初始化（通过 main_server.py 设置的环境变量）
+        self._verbose = '_NEKO_MAIN_SERVER_INITIALIZED' not in os.environ
         self.docs_dir = self._get_documents_directory()
         self.app_docs_dir = self.docs_dir / self.app_name
         self.config_dir = self.app_docs_dir / "config"
@@ -50,6 +52,11 @@ class ConfigManager:
 
         self.project_config_dir = self._get_project_config_directory()
         self.project_memory_dir = self._get_project_memory_directory()
+    
+    def _log(self, msg):
+        """仅在主进程中打印调试信息"""
+        if self._verbose:
+            print(msg, file=sys.stderr)
     
     def _get_documents_directory(self):
         """获取用户文档目录（使用系统API）"""
@@ -68,7 +75,7 @@ class ConfigManager:
                 buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
                 windll.shell32.SHGetFolderPathW(None, CSIDL_PERSONAL, None, SHGFP_TYPE_CURRENT, buf)
                 api_path = Path(buf.value)
-                print(f"[ConfigManager] API returned path: {api_path}", file=sys.stderr)
+                self._log(f"[ConfigManager] API returned path: {api_path}")
                 candidates.append(api_path)
                 
                 # 如果API返回的路径看起来不对（包含特殊字符但不存在），尝试查找同盘符下可能的替代路径
@@ -80,7 +87,7 @@ class ConfigManager:
                     for name in possible_names:
                         alt_path = Path(drive) / name
                         if alt_path.exists():
-                            print(f"[ConfigManager] Found alternative path on same drive: {alt_path}", file=sys.stderr)
+                            self._log(f"[ConfigManager] Found alternative path on same drive: {alt_path}")
                             candidates.append(alt_path)
             except Exception as e:
                 print(f"Warning: Failed to get Documents path via API: {e}", file=sys.stderr)
@@ -97,7 +104,7 @@ class ConfigManager:
                 
                 # 展开环境变量
                 reg_path = Path(os.path.expandvars(reg_path_str))
-                print(f"[ConfigManager] Registry returned path: {reg_path}", file=sys.stderr)
+                self._log(f"[ConfigManager] Registry returned path: {reg_path}")
                 
                 # 如果注册表路径不存在，尝试在同一盘符下查找
                 if not reg_path.exists() and reg_path.drive:
@@ -108,7 +115,7 @@ class ConfigManager:
                         if drive_path.exists():
                             for item in drive_path.iterdir():
                                 if item.is_dir() and item.name.lower() in ["documents", "文档", "my documents"]:
-                                    print(f"[ConfigManager] Found documents folder on drive: {item}", file=sys.stderr)
+                                    self._log(f"[ConfigManager] Found documents folder on drive: {item}")
                                     candidates.append(item)
                     except Exception:
                         pass
@@ -149,10 +156,10 @@ class ConfigManager:
                     try:
                         test_path.touch()
                         test_path.unlink()
-                        print(f"[ConfigManager] ✓ Using documents directory: {docs_dir}", file=sys.stderr)
+                        self._log(f"[ConfigManager] ✓ Using documents directory: {docs_dir}")
                         return docs_dir
                     except Exception as e:
-                        print(f"[ConfigManager] Path exists but not writable: {docs_dir} - {e}", file=sys.stderr)
+                        self._log(f"[ConfigManager] Path exists but not writable: {docs_dir} - {e}")
                         continue
                 
                 # 如果路径不存在，尝试创建（测试是否可写）
@@ -175,15 +182,15 @@ class ConfigManager:
                     test_path = docs_dir / ".test_neko_write"
                     test_path.touch()
                     test_path.unlink()
-                    print(f"[ConfigManager] ✓ Using documents directory (created): {docs_dir}", file=sys.stderr)
+                    self._log(f"[ConfigManager] ✓ Using documents directory (created): {docs_dir}")
                     return docs_dir
             except Exception as e:
-                print(f"[ConfigManager] Failed to use path {docs_dir}: {e}", file=sys.stderr)
+                self._log(f"[ConfigManager] Failed to use path {docs_dir}: {e}")
                 continue
         
         # 如果所有候选都失败，返回当前目录
         fallback = Path.cwd()
-        print(f"[ConfigManager] ⚠ All document directories failed, using fallback: {fallback}", file=sys.stderr)
+        self._log(f"[ConfigManager] ⚠ All document directories failed, using fallback: {fallback}")
         return fallback
     
     def _get_project_config_directory(self):
@@ -341,8 +348,8 @@ class ConfigManager:
             return
         
         # 显示项目配置目录位置（调试用）
-        print(f"[ConfigManager] Project config directory: {self.project_config_dir}")
-        print(f"[ConfigManager] User config directory: {self.config_dir}")
+        self._log(f"[ConfigManager] Project config directory: {self.project_config_dir}")
+        self._log(f"[ConfigManager] User config directory: {self.config_dir}")
         
         # 迁移每个配置文件
         for filename in CONFIG_FILES:
@@ -351,21 +358,21 @@ class ConfigManager:
             
             # 如果我的文档下已有，跳过
             if docs_config_path.exists():
-                print(f"[ConfigManager] Config already exists: {filename}")
+                self._log(f"[ConfigManager] Config already exists: {filename}")
                 continue
             
             # 如果项目config下有，复制过去
             if project_config_path.exists():
                 try:
                     shutil.copy2(project_config_path, docs_config_path)
-                    print(f"[ConfigManager] ✓ Migrated config: {filename} -> {docs_config_path}")
+                    self._log(f"[ConfigManager] ✓ Migrated config: {filename} -> {docs_config_path}")
                 except Exception as e:
-                    print(f"Warning: Failed to migrate {filename}: {e}", file=sys.stderr)
+                    self._log(f"Warning: Failed to migrate {filename}: {e}")
             else:
                 if filename in DEFAULT_CONFIG_DATA:
-                    print(f"[ConfigManager] ~ Using in-memory default for {filename}")
+                    self._log(f"[ConfigManager] ~ Using in-memory default for {filename}")
                 else:
-                    print(f"[ConfigManager] ✗ Source config not found: {project_config_path}")
+                    self._log(f"[ConfigManager] ✗ Source config not found: {project_config_path}")
     
     def migrate_memory_files(self):
         """
@@ -377,7 +384,7 @@ class ConfigManager:
         """
         # 确保目录存在
         if not self.ensure_memory_directory():
-            print(f"Warning: Cannot create memory directory, using project memory", file=sys.stderr)
+            self._log(f"Warning: Cannot create memory directory, using project memory")
             return
         
         # 如果项目memory/store目录不存在，跳过

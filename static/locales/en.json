@@ -86,7 +86,7 @@
     "localModPathConfig": "Local Mod Path Configuration",
     "localModFolder": "Local Mod Folder Path",
     "defaultPathHint": "This default path will be used when no scan path is specified",
-    "defaultPathExample": "Note: The default path is usually in Documents/N.E.K.O./live2d",
+    "defaultPathExample": "Note: The default path is usually in Documents/N.E.K.O/live2d",
     "loadConfig": "Load Current Configuration",
     "saveConfig": "Save Configuration",
     "emptyStateHint": "Please enter and scan a folder containing local files",
