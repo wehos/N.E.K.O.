@@ -1072,7 +1072,6 @@ Live2DManager.prototype._setupDragging = function(hud) {
     let isDragging = false;
     let dragOffsetX = 0;
     let dragOffsetY = 0;
-    let originalPosition = null;
     
     // 高性能拖拽函数
     const performDrag = (clientX, clientY) => {
@@ -1117,15 +1116,7 @@ Live2DManager.prototype._setupDragging = function(hud) {
         hud.style.opacity = '0.95';
         hud.style.transition = 'none'; // 拖拽时禁用过渡动画
         
-        // 保存原始位置用于边界计算
         const rect = hud.getBoundingClientRect();
-        originalPosition = {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height
-        };
-        
         // 计算鼠标相对于HUD的偏移
         dragOffsetX = e.clientX - rect.left;
         dragOffsetY = e.clientY - rect.top;
@@ -1214,6 +1205,7 @@ Live2DManager.prototype._setupDragging = function(hud) {
         if (isInteractive) return;
         
         touchDragging = true;
+        isDragging = true;  // 让performDrag函数能正常工作
         
         // 视觉反馈
         hud.style.boxShadow = '0 12px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.2)';
@@ -1222,8 +1214,9 @@ Live2DManager.prototype._setupDragging = function(hud) {
         
         const touch = e.touches[0];
         const rect = hud.getBoundingClientRect();
-        touchOffsetX = touch.clientX - rect.left;
-        touchOffsetY = touch.clientY - rect.top;
+        // 使用与鼠标事件相同的偏移量变量喵
+        dragOffsetX = touch.clientX - rect.left;
+        dragOffsetY = touch.clientY - rect.top;
         
         e.preventDefault();
     };
@@ -1243,6 +1236,7 @@ Live2DManager.prototype._setupDragging = function(hud) {
         if (!touchDragging) return;
         
         touchDragging = false;
+        isDragging = false;  // 确保performDrag函数停止工作
         
         // 恢复视觉状态
         hud.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)';
