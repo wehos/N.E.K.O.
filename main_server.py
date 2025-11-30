@@ -1,7 +1,34 @@
 # -*- coding: utf-8 -*-
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.add_dll_directory(os.getcwd())
+
+# Windows multiprocessing 支持：确保子进程不会重复执行模块级初始化
+from multiprocessing import freeze_support
+freeze_support()
+
+# 检查是否需要执行初始化（用于防止 Windows spawn 方式创建的子进程重复初始化）
+# 方案：首次导入时设置环境变量标记，子进程会继承这个标记从而跳过初始化
+_INIT_MARKER = '_NEKO_MAIN_SERVER_INITIALIZED'
+_IS_MAIN_PROCESS = _INIT_MARKER not in os.environ
+
+if _IS_MAIN_PROCESS:
+    # 立即设置标记，这样任何从此进程 spawn 的子进程都会继承此标记
+    os.environ[_INIT_MARKER] = '1'
+
+# 获取应用程序根目录（与 config_manager 保持一致）
+def _get_app_root():
+    if getattr(sys, 'frozen', False):
+        if hasattr(sys, '_MEIPASS'):
+            return sys._MEIPASS
+        else:
+            return os.path.dirname(sys.executable)
+    else:
+        return os.getcwd()
+
+# Only adjust DLL search path on Windows
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(_get_app_root())
+    
 import mimetypes
 mimetypes.add_type("application/javascript", ".js")
 import asyncio
@@ -14,31 +41,8 @@ import io
 import threading
 import time
 from urllib.parse import quote, unquote
-
-# 导入创意工坊工具模块
-from utils.workshop_utils import (
-    load_workshop_config,
-    save_workshop_config,
-    ensure_workshop_folder_exists,
-    get_workshop_root,
-    get_workshop_path
-)
-
-# 导入Steamworks异常类
 from steamworks.exceptions import SteamNotLoadedException
 from steamworks.enums import EWorkshopFileType, EItemUpdateStatus
-
-# 开发模式标志 - 在生产环境中设置为False
-
-# 初始化时加载创意工坊配置
-# 注意：workshop_utils模块中已经自动加载了配置
-# save_workshop_config函数已经从workshop_utils导入
-
-# ensure_workshop_folder_exists函数已经从workshop_utils导入
-
-DEVELOPMENT_MODE = True
-
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Body
 from fastapi.staticfiles import StaticFiles
 from main_helper import core as core, cross_server as cross_server
@@ -51,7 +55,6 @@ from multiprocessing import Process, Queue, Event
 import atexit
 import dashscope
 from dashscope.audio.tts_v2 import VoiceEnrollmentService
-import requests
 import httpx
 import pathlib, wave
 from openai import AsyncOpenAI
@@ -59,19 +62,17 @@ from config import MAIN_SERVER_PORT, MONITOR_SERVER_PORT, MEMORY_SERVER_PORT, MO
 from config.prompts_sys import emotion_analysis_prompt, proactive_chat_prompt
 import glob
 from utils.config_manager import get_config_manager
+# 导入创意工坊工具模块
+from utils.workshop_utils import (
+    load_workshop_config,
+    save_workshop_config,
+    ensure_workshop_folder_exists,
+    get_workshop_root,
+    get_workshop_path
+)
 
-# 确定 templates 目录位置（支持 PyInstaller/Nuitka 打包）
-if getattr(sys, 'frozen', False):
-    # 打包后运行
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller
-        template_dir = sys._MEIPASS
-    else:
-        # Nuitka
-        template_dir = os.path.dirname(os.path.abspath(__file__))
-else:
-    # 正常运行：当前目录
-    template_dir = "./"
+# 确定 templates 目录位置（使用 _get_app_root）
+template_dir = _get_app_root()
 
 templates = Jinja2Templates(directory=template_dir)
 
@@ -79,8 +80,9 @@ def initialize_steamworks():
     try:
         # 明确读取steam_appid.txt文件以获取应用ID
         app_id = None
-        if os.path.exists('steam_appid.txt'):
-            with open('steam_appid.txt', 'r') as f:
+        app_id_file = os.path.join(_get_app_root(), 'steam_appid.txt')
+        if os.path.exists(app_id_file):
+            with open(app_id_file, 'r') as f:
                 app_id = f.read().strip()
             print(f"从steam_appid.txt读取到应用ID: {app_id}")
         
@@ -135,9 +137,13 @@ def get_default_steam_info():
             logger.error(f"Error accessing Steamworks API: {e}")
 
 # 初始化Steamworks，但即使失败也继续启动服务
-steamworks = initialize_steamworks()
-# 尝试获取Steam信息，如果失败也不会阻止服务启动
-get_default_steam_info()
+# 只在主进程中初始化，防止子进程重复初始化
+if _IS_MAIN_PROCESS:
+    steamworks = initialize_steamworks()
+    # 尝试获取Steam信息，如果失败也不会阻止服务启动
+    get_default_steam_info()
+else:
+    steamworks = None
 
 
 # Configure logging
@@ -155,7 +161,11 @@ def cleanup():
         sync_message_queue[k].close()
         sync_message_queue[k].join_thread()
     logger.info("Cleanup completed")
-atexit.register(cleanup)
+
+# 只在主进程中注册 cleanup 函数，防止子进程退出时执行清理
+if _IS_MAIN_PROCESS:
+    atexit.register(cleanup)
+
 sync_message_queue = {}
 sync_shutdown_event = {}
 session_manager = {}
@@ -215,19 +225,57 @@ async def initialize_character_data():
                 old_websocket = session_manager[k].websocket
                 logger.info(f"保留 {k} 的现有WebSocket连接")
             
-            session_manager[k] = core.LLMSessionManager(
-                sync_message_queue[k],
-                k,
-                lanlan_prompt[k].replace('{LANLAN_NAME}', k).replace('{MASTER_NAME}', master_name)
-            )
+            # 注意：不在这里清理旧session，因为：
+            # 1. 切换当前角色音色时，已在API层面关闭了session
+            # 2. 切换其他角色音色时，已跳过重新加载
+            # 3. 其他场景不应该影响正在使用的session
+            # 如果旧session_manager有活跃session，保留它，只更新配置相关的字段
             
-            # 将websocket锁存储到session manager中，供cleanup()使用
-            session_manager[k].websocket_lock = websocket_locks[k]
+            # 先检查会话状态（在锁内检查避免竞态条件）
+            has_active_session = k in session_manager and session_manager[k].is_active
             
-            # 恢复websocket引用（如果存在）
-            if old_websocket:
-                session_manager[k].websocket = old_websocket
-                logger.info(f"已恢复 {k} 的WebSocket连接")
+            if has_active_session:
+                # 有活跃session，不重新创建session_manager，只更新配置
+                # 这是为了防止重新创建session_manager时破坏正在运行的session
+                try:
+                    old_mgr = session_manager[k]
+                    # 更新prompt
+                    old_mgr.lanlan_prompt = lanlan_prompt[k].replace('{LANLAN_NAME}', k).replace('{MASTER_NAME}', master_name)
+                    # 重新读取角色配置以更新voice_id等字段
+                    (
+                        _,
+                        _,
+                        _,
+                        lanlan_basic_config_updated,
+                        _,
+                        _,
+                        _,
+                        _,
+                        _,
+                        _
+                    ) = _config_manager.get_character_data()
+                    # 更新voice_id（这是切换音色时需要的）
+                    old_mgr.voice_id = lanlan_basic_config_updated[k].get('voice_id', '')
+                    logger.info(f"{k} 有活跃session，只更新配置，不重新创建session_manager")
+                except Exception as e:
+                    logger.error(f"更新 {k} 的活跃session配置失败: {e}", exc_info=True)
+                    # 配置更新失败，但为了不影响正在运行的session，继续使用旧配置
+                    # 如果确实需要更新配置，可以考虑在下次session重启时再应用
+            else:
+                # 没有活跃session，可以安全地重新创建session_manager
+                session_manager[k] = core.LLMSessionManager(
+                    sync_message_queue[k],
+                    k,
+                    lanlan_prompt[k].replace('{LANLAN_NAME}', k).replace('{MASTER_NAME}', master_name)
+                )
+                
+                # 将websocket锁存储到session manager中，供cleanup()使用
+                session_manager[k].websocket_lock = websocket_locks[k]
+                
+                # 恢复websocket引用（如果存在）
+                if old_websocket:
+                    session_manager[k].websocket = old_websocket
+                    logger.info(f"已恢复 {k} 的WebSocket连接")
         
         # 检查并启动同步连接器进程
         # 如果是新角色，或者进程不存在/已停止，需要启动进程
@@ -310,12 +358,14 @@ async def initialize_character_data():
     logger.info(f"角色配置加载完成，当前角色: {catgirl_names}，主人: {master_name}")
 
 # 初始化角色数据（使用asyncio.run在模块级别执行async函数）
-import asyncio as _init_asyncio
-try:
-    _init_asyncio.get_event_loop()
-except RuntimeError:
-    _init_asyncio.set_event_loop(_init_asyncio.new_event_loop())
-_init_asyncio.get_event_loop().run_until_complete(initialize_character_data())
+# 只在主进程中执行，防止 Windows 上子进程重复导入时再次启动子进程
+if _IS_MAIN_PROCESS:
+    import asyncio as _init_asyncio
+    try:
+        _init_asyncio.get_event_loop()
+    except RuntimeError:
+        _init_asyncio.set_event_loop(_init_asyncio.new_event_loop())
+    _init_asyncio.get_event_loop().run_until_complete(initialize_character_data())
 lock = asyncio.Lock()
 
 # --- FastAPI App Setup ---
@@ -328,18 +378,8 @@ class CustomStaticFiles(StaticFiles):
             response.headers['Content-Type'] = 'application/javascript'
         return response
 
-# 确定 static 目录位置（支持 PyInstaller/Nuitka 打包）
-if getattr(sys, 'frozen', False):
-    # 打包后运行
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller
-        static_dir = os.path.join(sys._MEIPASS, 'static')
-    else:
-        # Nuitka
-        static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
-else:
-    # 正常运行：当前目录
-    static_dir = 'static'
+# 确定 static 目录位置（使用 _get_app_root）
+static_dir = os.path.join(_get_app_root(), 'static')
 
 app.mount("/static", CustomStaticFiles(directory=static_dir), name="static")
 
@@ -897,14 +937,14 @@ async def shutdown_event():
     
     # 向memory_server发送关闭信号
     try:
-        import requests
         from config import MEMORY_SERVER_PORT
         shutdown_url = f"http://localhost:{MEMORY_SERVER_PORT}/shutdown"
-        response = requests.post(shutdown_url, timeout=2)
-        if response.status_code == 200:
-            logger.info("已向memory_server发送关闭信号")
-        else:
-            logger.warning(f"向memory_server发送关闭信号失败，状态码: {response.status_code}")
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.post(shutdown_url)
+            if response.status_code == 200:
+                logger.info("已向memory_server发送关闭信号")
+            else:
+                logger.warning(f"向memory_server发送关闭信号失败，状态码: {response.status_code}")
     except Exception as e:
         logger.warning(f"向memory_server发送关闭信号时出错: {e}")
 
@@ -2220,10 +2260,14 @@ async def update_catgirl(name: str, request: Request):
             except Exception as e:
                 logger.error(f"结束session时出错: {e}")
     
-    # 自动重新加载配置
-    await initialize_character_data()
-    if voice_id_changed:
+    # 方案3：条件性重新加载 - 只有当前猫娘或voice_id变更时才重新加载配置
+    if voice_id_changed and is_current_catgirl:
+        # 自动重新加载配置
+        await initialize_character_data()
         logger.info(f"配置已重新加载，新的voice_id已生效")
+    elif voice_id_changed and not is_current_catgirl:
+        # 不是当前猫娘，跳过重新加载，避免影响当前猫娘的session
+        logger.info(f"切换的是其他猫娘 {name} 的音色，跳过重新加载以避免影响当前猫娘的session")
     
     return {"success": True, "voice_id_changed": voice_id_changed, "session_restarted": session_ended}
 
@@ -2327,9 +2371,14 @@ async def update_catgirl_voice_id(name: str, request: Request):
             except Exception as e:
                 logger.error(f"结束session时出错: {e}")
     
-    # 3. 重新加载配置，让新的voice_id生效
-    await initialize_character_data()
-    logger.info(f"配置已重新加载，新的voice_id已生效")
+    # 方案3：条件性重新加载 - 只有当前猫娘才重新加载配置
+    if is_current_catgirl:
+        # 3. 重新加载配置，让新的voice_id生效
+        await initialize_character_data()
+        logger.info(f"配置已重新加载，新的voice_id已生效")
+    else:
+        # 不是当前猫娘，跳过重新加载，避免影响当前猫娘的session
+        logger.info(f"切换的是其他猫娘 {name} 的音色，跳过重新加载以避免影响当前猫娘的session")
     
     return {"success": True, "session_restarted": session_ended}
 
@@ -2528,48 +2577,49 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
         }
         
         logger.info(f"正在上传文件到tfLink，文件名: {file.filename}, 大小: {file_size} bytes, MIME类型: {mime_type}")
-        resp = requests.post('http://47.101.214.205:8000/api/upload', files=files, headers=headers, timeout=60)
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post('http://47.101.214.205:8000/api/upload', files=files, headers=headers)
 
-        # 检查响应状态
-        if resp.status_code != 200:
-            logger.error(f"上传到tfLink失败，状态码: {resp.status_code}, 响应内容: {resp.text}")
-            return JSONResponse({'error': f'上传到tfLink失败，状态码: {resp.status_code}, 详情: {resp.text[:200]}'}, status_code=500)
+            # 检查响应状态
+            if resp.status_code != 200:
+                logger.error(f"上传到tfLink失败，状态码: {resp.status_code}, 响应内容: {resp.text}")
+                return JSONResponse({'error': f'上传到tfLink失败，状态码: {resp.status_code}, 详情: {resp.text[:200]}'}, status_code=500)
             
-        try:
-            # 解析JSON响应
-            data = resp.json()
-            logger.info(f"tfLink原始响应: {data}")
-            
-            # 获取下载链接
-            tmp_url = None
-            possible_keys = ['downloadLink', 'download_link', 'url', 'direct_link', 'link', 'download_url']
-            for key in possible_keys:
-                if key in data:
-                    tmp_url = data[key]
-                    logger.info(f"找到下载链接键: {key}")
-                    break
-            
-            if not tmp_url:
-                logger.error(f"无法从响应中提取URL: {data}")
-                return JSONResponse({'error': f'上传成功但无法从响应中提取URL'}, status_code=500)
-            
-            # 确保URL有效
-            if not tmp_url.startswith(('http://', 'https://')):
-                logger.error(f"无效的URL格式: {tmp_url}")
-                return JSONResponse({'error': f'无效的URL格式: {tmp_url}'}, status_code=500)
+            try:
+                # 解析JSON响应
+                data = resp.json()
+                logger.info(f"tfLink原始响应: {data}")
                 
-            # 测试URL是否可访问
-            test_resp = requests.head(tmp_url, timeout=10)
-            if test_resp.status_code >= 400:
-                logger.error(f"生成的URL无法访问: {tmp_url}, 状态码: {test_resp.status_code}")
-                return JSONResponse({'error': f'生成的临时URL无法访问，请重试'}, status_code=500)
+                # 获取下载链接
+                tmp_url = None
+                possible_keys = ['downloadLink', 'download_link', 'url', 'direct_link', 'link', 'download_url']
+                for key in possible_keys:
+                    if key in data:
+                        tmp_url = data[key]
+                        logger.info(f"找到下载链接键: {key}")
+                        break
                 
-            logger.info(f"成功获取临时URL并验证可访问性: {tmp_url}")
+                if not tmp_url:
+                    logger.error(f"无法从响应中提取URL: {data}")
+                    return JSONResponse({'error': f'上传成功但无法从响应中提取URL'}, status_code=500)
                 
-        except ValueError:
-            raw_text = resp.text
-            logger.error(f"上传成功但响应格式无法解析: {raw_text}")
-            return JSONResponse({'error': f'上传成功但响应格式无法解析: {raw_text[:200]}'}, status_code=500)
+                # 确保URL有效
+                if not tmp_url.startswith(('http://', 'https://')):
+                    logger.error(f"无效的URL格式: {tmp_url}")
+                    return JSONResponse({'error': f'无效的URL格式: {tmp_url}'}, status_code=500)
+                    
+                # 测试URL是否可访问
+                test_resp = await client.head(tmp_url, timeout=10)
+                if test_resp.status_code >= 400:
+                    logger.error(f"生成的URL无法访问: {tmp_url}, 状态码: {test_resp.status_code}")
+                    return JSONResponse({'error': f'生成的临时URL无法访问，请重试'}, status_code=500)
+                    
+                logger.info(f"成功获取临时URL并验证可访问性: {tmp_url}")
+                
+            except ValueError:
+                raw_text = resp.text
+                logger.error(f"上传成功但响应格式无法解析: {raw_text}")
+                return JSONResponse({'error': f'上传成功但响应格式无法解析: {raw_text[:200]}'}, status_code=500)
         
         # 3. 用直链注册音色
         core_config = _config_manager.get_core_config()
@@ -2800,14 +2850,14 @@ async def shutdown_server_async():
         
         # 向memory_server发送关闭信号
         try:
-            import requests
             from config import MEMORY_SERVER_PORT
             shutdown_url = f"http://localhost:{MEMORY_SERVER_PORT}/shutdown"
-            response = requests.post(shutdown_url, timeout=1)
-            if response.status_code == 200:
-                logger.info("已向memory_server发送关闭信号")
-            else:
-                logger.warning(f"向memory_server发送关闭信号失败，状态码: {response.status_code}")
+            async with httpx.AsyncClient(timeout=1) as client:
+                response = await client.post(shutdown_url)
+                if response.status_code == 200:
+                    logger.info("已向memory_server发送关闭信号")
+                else:
+                    logger.warning(f"向memory_server发送关闭信号失败，状态码: {response.status_code}")
         except Exception as e:
             logger.warning(f"向memory_server发送关闭信号时出错: {e}")
         
@@ -3413,7 +3463,7 @@ async def proxy_image(image_path: str):
             return JSONResponse(content={"success": False, "error": "暂不支持远程图片URL"}, status_code=400)
         
         # 获取基础目录和允许访问的目录列表
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = _get_app_root()
         allowed_dirs = [
             os.path.realpath(os.path.join(base_dir, 'static')),
             os.path.realpath(os.path.join(base_dir, 'assets'))
@@ -4202,7 +4252,7 @@ async def check_file_exists(path: str = None):
             return JSONResponse(content={"exists": False}, status_code=400)
         
         # 获取基础目录和允许访问的目录列表
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = _get_app_root()
         allowed_dirs = [
             os.path.realpath(os.path.join(base_dir, 'static')),
             os.path.realpath(os.path.join(base_dir, 'assets'))
@@ -4242,12 +4292,9 @@ async def find_first_image(folder: str = None):
     2. 防止路径遍历攻击
     3. 限制返回信息，避免泄露文件系统信息
     4. 记录可疑访问尝试
-    5. 此端点在非开发模式下被完全禁用
+    5. 只返回小于 1MB 的图片（Steam创意工坊预览图大小限制）
     """
-    # 开发模式检查 - 在非开发模式下完全禁用此端点
-    if not DEVELOPMENT_MODE:
-        logger.warning("预览图片查找端点在生产环境中已禁用")
-        return JSONResponse(content={"error": "此功能仅在开发模式下可用"}, status_code=403)
+    MAX_IMAGE_SIZE = 1 * 1024 * 1024  # 1MB
     
     try:
         # 检查参数有效性
@@ -4259,7 +4306,7 @@ async def find_first_image(folder: str = None):
         logger.warning(f"预览图片查找请求: {folder}")
         
         # 获取基础目录和允许访问的目录列表
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = _get_app_root()
         allowed_dirs = [
             os.path.realpath(os.path.join(base_dir, 'static')),
             os.path.realpath(os.path.join(base_dir, 'assets'))
@@ -4320,6 +4367,12 @@ async def find_first_image(folder: str = None):
             try:
                 # 检查文件是否存在
                 if os.path.exists(image_path) and os.path.isfile(image_path):
+                    # 检查文件大小是否小于 1MB
+                    file_size = os.path.getsize(image_path)
+                    if file_size >= MAX_IMAGE_SIZE:
+                        logger.info(f"跳过大于1MB的图片: {image_name} ({file_size / 1024 / 1024:.2f}MB)")
+                        continue
+                    
                     # 再次验证图片文件路径是否在允许的目录内
                     real_image_path = os.path.realpath(image_path)
                     if any(real_image_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
@@ -4335,7 +4388,7 @@ async def find_first_image(folder: str = None):
                 logger.error(f"检查图片文件 {image_name} 失败: {e}")
                 continue
         
-        return JSONResponse(content={"success": False, "error": "未找到指定的预览图片文件"})
+        return JSONResponse(content={"success": False, "error": "未找到小于1MB的预览图片文件"})
         
     except Exception as e:
         logger.error(f"查找预览图片文件失败: {e}")
@@ -4373,7 +4426,8 @@ def find_preview_image_in_folder(folder_path):
 async def live2d_emotion_manager(request: Request):
     """Live2D情感映射管理器页面"""
     try:
-        with open('templates/live2d_emotion_manager.html', 'r', encoding='utf-8') as f:
+        template_path = os.path.join(_get_app_root(), 'templates', 'live2d_emotion_manager.html')
+        with open(template_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return HTMLResponse(content=content)
     except Exception as e:

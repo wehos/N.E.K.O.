@@ -105,6 +105,10 @@ class ComputerUseAdapter:
         self.agent = None
         self.grounding_agent = None
         self.init_ok = False
+        # 初始化默认屏幕尺寸（避免在无显示器环境如 Docker 中出错）
+        self.screen_width, self.screen_height = 1920, 1080
+        self.scaled_width, self.scaled_height = 1920, 1080
+        self.scale_x, self.scale_y = 1.0, 1.0
         # 获取配置
         self._config_manager = get_config_manager()
         try:
@@ -247,13 +251,18 @@ class ComputerUseAdapter:
                 # If monkey patching fails, continue with the original behavior
                 pass
             from brain.s2_5.agents.agent_s import AgentS2_5
-            if pyautogui is not None:
-                self.screen_width, self.screen_height = pyautogui.size()
-                print("screen_width, screen_height:", self.screen_width, self.screen_height)
-                self.scaled_width, self.scaled_height = self.screen_width, self.screen_height#scale_screen_dimensions(self.screen_width, self.screen_height, max_dim_size=1920)
-                # Precompute scale factors from logical (scaled) space -> physical screen
-                self.scale_x = self.screen_width / max(1, self.scaled_width)
-                self.scale_y = self.screen_height / max(1, self.scaled_height)
+            if pyautogui is None:
+                # 无显示器环境（如 Docker），GUI agent 无法工作
+                self.last_error = "pyautogui not available (no display). GUI agent cannot run in headless environment."
+                print("GUI agent unavailable: pyautogui requires a display")
+                return  # 直接返回，不继续初始化
+            
+            self.screen_width, self.screen_height = pyautogui.size()
+            print("screen_width, screen_height:", self.screen_width, self.screen_height)
+            self.scaled_width, self.scaled_height = self.screen_width, self.screen_height#scale_screen_dimensions(self.screen_width, self.screen_height, max_dim_size=1920)
+            # Precompute scale factors from logical (scaled) space -> physical screen
+            self.scale_x = self.screen_width / max(1, self.scaled_width)
+            self.scale_y = self.screen_height / max(1, self.scaled_height)
 
             engine_params, engine_params_for_grounding = self._build_params()
             self.grounding_agent = OSWorldACI(

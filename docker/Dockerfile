@@ -1,62 +1,87 @@
-# 多阶段构建 Dockerfile for N.E.K.O. Project
+# 使用 Debian bookworm 作为基础镜像
+FROM debian:bookworm
 
-# 阶段 1: 基础镜像
-FROM python:3.11-slim as base
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
+# 1. 配置阿里云 apt 镜像源
+RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main non-free non-free-firmware contrib" > /etc/apt/sources.list && \
+    echo "deb-src http://mirrors.aliyun.com/debian/ bookworm main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb-src http://mirrors.aliyun.com/debian-security/ bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb-src http://mirrors.aliyun.com/debian/ bookworm-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian/ bookworm-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+    echo "deb-src http://mirrors.aliyun.com/debian/ bookworm-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list
+
+# 2. 更新系统并安装基础依赖
+# 注意：此阶段编译需要预填临时代理，否则编译速度会很慢，除非你在国外
+RUN export http_proxy=http://192.168.8.2:10809 && \
+    export https_proxy=http://192.168.8.2:10809 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    wget \
+    curl \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    pkg-config \
+    net-tools \
+    build-essential \
     gcc \
     g++ \
-    libsndfile1 \
-    libportaudio2 portaudio19-dev \
-    libgomp1 \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+    make \
+    portaudio19-dev \
+    && rm -rf /var/lib/apt/lists/* && \
+    unset http_proxy && \
+    unset https_proxy
 
-# 阶段 2: 依赖安装
-FROM base as dependencies
+# 3. 创建 Python 符号链接
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# 复制依赖文件
-COPY ../requirements.txt .
+# 4. 安装 uv
+# 注意：此阶段编译需要预填临时代理，否则编译速度会很慢，除非你在国外
+RUN export http_proxy=http://192.168.8.2:10809 && \
+    export https_proxy=http://192.168.8.2:10809 && \
+    wget -qO- https://astral.sh/uv/install.sh | sh && \
+    echo 'export PATH="/root/.cargo/bin:$PATH"' >> /root/.bashrc && \
+    unset http_proxy && \
+    unset https_proxy
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 5. 配置 uv 使用阿里云镜像
+RUN mkdir -p /root/.config/uv && \
+    echo '[[index]]' > /root/.config/uv/uv.toml && \
+    echo 'url = "https://mirrors.aliyun.com/pypi/simple/"' >> /root/.config/uv/uv.toml && \
+    echo 'default = true' >> /root/.config/uv/uv.toml
 
-# 阶段 3: 应用构建
-FROM base as application
+# 6. 克隆 N.E.K.O. 项目
+# 注意：此阶段编译需要预填临时代理，否则编译速度会很慢，除非你在国外
+RUN export http_proxy=http://192.168.8.2:10809 && \
+    export https_proxy=http://192.168.8.2:10809 && \
+    cd / && \
+    git clone https://github.com/Project-N-E-K-O/N.E.K.O.git app && \
+    cd /app && \
+    git checkout main && \
+    unset http_proxy && \
+    unset https_proxy
 
-# 从依赖阶段复制已安装的包
-COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=dependencies /usr/local/bin /usr/local/bin
+# 7. 设置环境变量
+ENV PATH="/root/.cargo/bin:/usr/bin:/usr/local/bin:$PATH"
+ENV PYTHONPATH="/app:$PYTHONPATH"
 
-# 复制应用代码
-COPY . /app
+# 8. 复制 entrypoint 脚本
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# 创建必要的目录
-RUN mkdir -p /app/config \
-    /app/memory/store \
-    /app/logs \
-    /app/static
+# 9. 创建数据持久化目录
+VOLUME ["/data"]
 
-# 设置权限
-RUN chmod +x /app/docker/entrypoint.sh 2>/dev/null || true
-
-# 暴露端口
-EXPOSE 48911 48912 48913 48915
-
-# 设置环境变量
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=UTF-8 \
-    TZ=Asia/Shanghai
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:48911/ || exit 1
-
-# 启动脚本
-ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["python", "main_server.py"]
-
+# 10. 设置入口点
+ENTRYPOINT ["/entrypoint.sh"]
