@@ -8,7 +8,6 @@ import json
 import struct  # For packing audio data
 import threading
 import re
-import requests
 import logging
 import time
 from datetime import datetime
@@ -636,7 +635,9 @@ class LLMSessionManager:
             """异步创建并连接 LLM Session"""
             # 获取初始 prompt
             initial_prompt = (f"你是一个角色扮演大师，并且精通电脑操作。请按要求扮演以下角色（{self.lanlan_name}），并在对方请求时、回答'我试试'并尝试操纵电脑。" if self._is_agent_enabled() else f"你是一个角色扮演大师。请按要求扮演以下角色（{self.lanlan_name}）。") + self.lanlan_prompt
-            initial_prompt += requests.get(f"http://localhost:{self.memory_server_port}/new_dialog/{self.lanlan_name}").text
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:{self.memory_server_port}/new_dialog/{self.lanlan_name}")
+                initial_prompt += resp.text
             
             logger.info(f"🤖 开始创建 LLM Session (input_mode={input_mode})")
             

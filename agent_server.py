@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 import multiprocessing as mp
+import httpx
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -252,7 +253,6 @@ async def _poll_results_loop():
                     Modules.active_computer_use_task_id = None
                 # Notify main server about completion so it can insert an extra reply next turn
                 try:
-                    import requests as _rq
                     summary = "任务已完成"
                     try:
                         # Build a compact result summary if possible
@@ -265,18 +265,18 @@ async def _poll_results_loop():
                         params = info.get("params") or {}
                         desc = params.get("query") or params.get("instruction") or ""
                         if detail and desc:
-                            summary = f"你的任务“{desc}”已完成：{detail}"[:240]
+                            summary = f"你的任务 “{desc}” 已完成：{detail}"[:240]
                         elif detail:
                             summary = f"你的任务已完成：{detail}"[:240]
                         elif desc:
-                            summary = f"你的任务“{desc}”已完成"[:240]
+                            summary = f"你的任务 “{desc}” 已完成"[:240]
                     except Exception:
                         pass
-                    _rq.post(
-                        f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
-                        json={"text": summary, "lanlan_name": info.get("lanlan_name")},
-                        timeout=0.5,
-                    )
+                    async with httpx.AsyncClient(timeout=0.5) as _client:
+                        await _client.post(
+                            f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
+                            json={"text": summary, "lanlan_name": info.get("lanlan_name")},
+                        )
                 except Exception:
                     pass
         except Exception:
@@ -361,12 +361,11 @@ async def _background_analyze_and_plan(messages: list[dict[str, Any]], lanlan_na
                 
                 # 通知 main_server
                 try:
-                    import requests as _rq
-                    _rq.post(
-                        f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
-                        json={"text": summary[:240], "lanlan_name": lanlan_name},
-                        timeout=0.5,
-                    )
+                    async with httpx.AsyncClient(timeout=0.5) as _client:
+                        await _client.post(
+                            f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
+                            json={"text": summary[:240], "lanlan_name": lanlan_name},
+                        )
                     logger.info(f"[TaskExecutor] ✅ MCP task completed and notified: {result.task_description}")
                 except Exception as e:
                     logger.warning(f"[TaskExecutor] Failed to notify main_server: {e}")
@@ -468,12 +467,11 @@ async def process_query(payload: Dict[str, Any]):
             if result.get('can_execute'):
                 summary = f'你的任务"{query[:50]}"已完成'
                 try:
-                    import requests as _rq
-                    _rq.post(
-                        f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
-                        json={"text": summary[:240], "lanlan_name": lanlan_name},
-                        timeout=0.5,
-                    )
+                    async with httpx.AsyncClient(timeout=0.5) as _client:
+                        await _client.post(
+                            f"http://localhost:{MAIN_SERVER_PORT}/api/notify_task_result",
+                            json={"text": summary[:240], "lanlan_name": lanlan_name},
+                        )
                 except Exception:
                     pass
             logger.info(f"[MCP] ✅ Process task {task_id} completed")

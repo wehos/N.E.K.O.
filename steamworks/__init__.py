@@ -20,6 +20,28 @@ from steamworks.structs 	import *
 from steamworks.exceptions 	import *
 from steamworks.methods 	import STEAMWORKS_METHODS
 
+
+def _get_app_root():
+    """获取应用程序根目录（与 config_manager 保持一致）
+    
+    处理 PyInstaller 打包情况：
+    - 单文件模式：使用 sys._MEIPASS（临时解压目录）
+    - 多文件模式：使用 sys.executable 所在目录
+    - 脚本运行：使用当前工作目录
+    """
+    if getattr(sys, 'frozen', False):
+        # 打包后运行
+        if hasattr(sys, '_MEIPASS'):
+            # PyInstaller 单文件模式：DLL 在 _MEIPASS 同级的根目录
+            # 但在单文件模式下，DLL 实际应该放在解压目录中
+            return sys._MEIPASS
+        else:
+            # PyInstaller 多文件模式：DLL 应该在 exe 同目录
+            return os.path.dirname(sys.executable)
+    else:
+        # 脚本运行：使用当前工作目录
+        return os.getcwd()
+
 from steamworks.interfaces.apps         import SteamApps
 from steamworks.interfaces.friends      import SteamFriends
 from steamworks.interfaces.matchmaking  import SteamMatchmaking
@@ -32,7 +54,8 @@ from steamworks.interfaces.workshop     import SteamWorkshop
 from steamworks.interfaces.microtxn     import SteamMicroTxn
 from steamworks.interfaces.input        import SteamInput
 
-os.environ['LD_LIBRARY_PATH'] = os.getcwd()
+# 设置 LD_LIBRARY_PATH（Linux）使用应用根目录
+os.environ['LD_LIBRARY_PATH'] = _get_app_root()
 
 
 class STEAMWORKS(object):
@@ -64,11 +87,16 @@ class STEAMWORKS(object):
         if platform not in STEAMWORKS._native_supported_platforms:
             raise UnsupportedPlatformException(f'"{platform}" is not being supported')
 
+        # 获取应用程序根目录（与 config_manager 逻辑保持一致）
+        app_root = _get_app_root()
+        
         library_file_name = ''
         if platform in ['linux', 'linux2']:
             library_file_name = 'SteamworksPy.so'
-            if os.path.isfile(os.path.join(os.getcwd(), 'libsteam_api.so')):
-                cdll.LoadLibrary(os.path.join(os.getcwd(), 'libsteam_api.so')) #if i do this then linux works
+            # 优先从应用根目录加载
+            libsteam_path = os.path.join(app_root, 'libsteam_api.so')
+            if os.path.isfile(libsteam_path):
+                cdll.LoadLibrary(libsteam_path)
             elif os.path.isfile(os.path.join(os.path.dirname(__file__), 'libsteam_api.so')):
                 cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), 'libsteam_api.so'))
             else:
@@ -84,16 +112,18 @@ class STEAMWORKS(object):
             # This case is theoretically unreachable
             raise UnsupportedPlatformException(f'"{platform}" is not being supported')
 
-        if os.path.isfile(os.path.join(os.getcwd(), library_file_name)):
-            library_path = os.path.join(os.getcwd(), library_file_name)
+        # 按优先级查找库文件：应用根目录 > 模块目录
+        if os.path.isfile(os.path.join(app_root, library_file_name)):
+            library_path = os.path.join(app_root, library_file_name)
         elif os.path.isfile(os.path.join(os.path.dirname(__file__), library_file_name)):
             library_path = os.path.join(os.path.dirname(__file__), library_file_name)
         else:
             raise MissingSteamworksLibraryException(f'Missing library {library_file_name}')
 
-        app_id_file = os.path.join(os.getcwd(), 'steam_appid.txt')
+        # 从应用根目录查找 steam_appid.txt
+        app_id_file = os.path.join(app_root, 'steam_appid.txt')
         if not os.path.isfile(app_id_file):
-            raise FileNotFoundError(f'steam_appid.txt missing from {os.getcwd()}')
+            raise FileNotFoundError(f'steam_appid.txt missing from {app_root}')
 
         with open(app_id_file, 'r') as f:
             self.app_id	= int(f.read())

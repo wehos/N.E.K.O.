@@ -24,7 +24,6 @@ config/*.json
 !config/api_providers.json
 env/*
 lanlan_frd.exe
-static/kara
 
 # 忽略临时文件
 *.tmp
@@ -73,12 +72,17 @@ Thumbs.db
 ehthumbs.db
 desktop.ini
 
+# 忽略静态资源
 static/ziraitikuwa/*
+statcu/kara/*
 打包说明.txt
 runtime_hook_inflect.py
 backup/
 build*
-launcher.py
-*spec
 metadata.package.json
 version_info.txt
+
+# 复原Steam
+!steam_api64.dll
+!steam_api64.lib
+!SteamworksPy64.dll

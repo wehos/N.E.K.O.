@@ -18,7 +18,7 @@ import os
 import logging
 import json
 from pathlib import Path
-import requests
+import httpx
 
 from utils.workshop_utils import load_workshop_config
 
@@ -209,7 +209,7 @@ def find_models():
     return found_models
 
 # --- 工具函数 ---
-def get_upload_policy(api_key, model_name):
+async def get_upload_policy(api_key, model_name):
     url = "https://dashscope.aliyuncs.com/api/v1/uploads"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -219,12 +219,13 @@ def get_upload_policy(api_key, model_name):
         "action": "getPolicy",
         "model": model_name
     }
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code != 200:
-        raise Exception(f"获取上传凭证失败: {response.text}")
-    return response.json()['data']
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            raise Exception(f"获取上传凭证失败: {response.text}")
+        return response.json()['data']
 
-def upload_file_to_oss(policy_data, file_path):
+async def upload_file_to_oss(policy_data, file_path):
     file_name = Path(file_path).name
     key = f"{policy_data['upload_dir']}/{file_name}"
     with open(file_path, 'rb') as file:
@@ -238,9 +239,10 @@ def upload_file_to_oss(policy_data, file_path):
             'success_action_status': (None, '200'),
             'file': (file_name, file)
         }
-        response = requests.post(policy_data['upload_host'], files=files)
-        if response.status_code != 200:
-            raise Exception(f"上传文件失败: {response.text}")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(policy_data['upload_host'], files=files)
+            if response.status_code != 200:
+                raise Exception(f"上传文件失败: {response.text}")
     return f'oss://{key}'
 
 
