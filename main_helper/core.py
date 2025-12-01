@@ -490,6 +490,9 @@ class LLMSessionManager:
         self.websocket = websocket
         self.input_mode = input_mode
         
+        # 立即通知前端系统正在准备（静默期开始）
+        await self.send_session_preparing(input_mode)
+        
         # 重新读取核心配置以支持热重载
         core_config = self._config_manager.get_core_config()
         self.model = core_config['CORE_MODEL']
@@ -1354,6 +1357,16 @@ class LLMSessionManager:
             pass
         except Exception as e:
             logger.error(f"💥 WS Send Status Error: {e}")
+    
+    async def send_session_preparing(self, input_mode: str): # 通知前端session正在准备（静默期）
+        try:
+            if self.websocket and hasattr(self.websocket, 'client_state') and self.websocket.client_state == self.websocket.client_state.CONNECTED:
+                data = json.dumps({"type": "session_preparing", "input_mode": input_mode})
+                await self.websocket.send_text(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"💥 WS Send Session Preparing Error: {e}")
     
     async def send_session_started(self, input_mode: str): # 通知前端session已启动
         try:

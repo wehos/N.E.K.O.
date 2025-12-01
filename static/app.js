@@ -353,8 +353,17 @@ function init_app(){
                     if (proactiveChatEnabled && !isRecording) {
                         resetProactiveChatBackoff();
                     }
+                } else if (response.type === 'session_preparing') {
+                    console.log('收到session_preparing事件，模式:', response.input_mode);
+                    // 显示持续性的准备中提示
+                    const preparingMessage = response.input_mode === 'text' 
+                        ? (window.t ? window.t('app.textSystemPreparing') : '文本系统准备中，请稍候...')
+                        : (window.t ? window.t('app.voiceSystemPreparing') : '语音系统准备中，请稍候...');
+                    showVoicePreparingToast(preparingMessage);
                 } else if (response.type === 'session_started') {
                     console.log('收到session_started事件，模式:', response.input_mode);
+                    // 隐藏准备中提示
+                    hideVoicePreparingToast();
                     // 解析 session_started Promise
                     if (sessionStartedResolver) {
                         // 清除可能存在的超时定时器（通过全局变量）
