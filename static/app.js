@@ -456,6 +456,13 @@ function init_app(){
             // 如果是Gemini消息，更新当前消息引用
             if (sender === 'gemini') {
                 currentGeminiMessage = messageDiv;
+                
+                // 如果是AI第一次回复，更新状态并检查成就
+                if (isFirstAIResponse) {
+                    isFirstAIResponse = false;
+                    console.log('检测到AI第一次回复');
+                    checkAndUnlockFirstDialogueAchievement();
+                }
             }
         }
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -466,6 +473,34 @@ function init_app(){
     let cachedMicrophones = null;
     let cacheTimestamp = 0;
     const CACHE_DURATION = 30000; // 缓存30秒
+    
+    // 首次交互跟踪
+    let isFirstUserInput = true; // 跟踪是否为用户第一次输入
+    let isFirstAIResponse = true; // 跟踪是否为AI第一次回复
+    
+    // 检查并解锁首次对话成就
+    async function checkAndUnlockFirstDialogueAchievement() {
+        // 当用户和AI都完成首次交互后调用API
+        if (!isFirstUserInput && !isFirstAIResponse) {
+            try {
+                console.log('首次对话完成，尝试解锁成就');
+                const response = await fetch('/api/steam/set-achievement-status/ACH_FIRST_DIALOGUE', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    console.log('成就解锁API调用成功');
+                } else {
+                    console.error('成就解锁API调用失败');
+                }
+            } catch (error) {
+                console.error('成就解锁过程中发生错误:', error);
+            }
+        }
+    }
 
     // 麦克风选择器UI已移除（旧sidebar系统），保留核心函数供live2d.js浮动按钮系统使用
     
@@ -1449,6 +1484,13 @@ function init_app(){
                 
                 // 在聊天界面显示用户消息
                 appendMessage(text, 'user', true);
+                
+                // 如果是用户第一次输入，更新状态并检查成就
+                if (isFirstUserInput) {
+                    isFirstUserInput = false;
+                    console.log('检测到用户第一次输入');
+                    checkAndUnlockFirstDialogueAchievement();
+                }
             }
             
             // 文本聊天后，重置主动搭话计时器（如果已开启）

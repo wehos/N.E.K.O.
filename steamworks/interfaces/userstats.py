@@ -157,5 +157,5 @@ class SteamUserStats(object):
         else:
             self.SetFindLeaderboardResultCallback(callback)
 
-        Steam.cdll.Leaderboard_FindLeaderboard(name.encode())
+        self.steam.Leaderboard_FindLeaderboard(name.encode())
         return True

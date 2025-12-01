@@ -4251,6 +4251,17 @@ def _publish_workshop_item(steamworks, title, description, content_folder, previ
         logger.error(f"发布创意工坊物品时出错: {e}")
         raise
 
+@app.post('/api/steam/set-achievement-status/{name}')
+async def set_achievement_status(name: str):
+    achievement_status = steamworks.UserStats.GetAchievement(name)
+    logger.info(f"Achievement status: {achievement_status}")
+    if not achievement_status:
+        result = steamworks.UserStats.SetAchievement(name)
+        if result:
+            logger.info(f"成功设置成就: {name}")
+            steamworks.UserStats.StoreStats()
+        else:
+            logger.error(f"设置成就失败: {name}，{result}")
 
 @app.get('/api/file-exists')
 async def check_file_exists(path: str = None):
