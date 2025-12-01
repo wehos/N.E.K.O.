@@ -501,7 +501,26 @@ class LLMSessionManager:
         self.openrouter_url = core_config['OPENROUTER_URL']
         self.openrouter_api_key = core_config['OPENROUTER_API_KEY']
         self.audio_api_key = core_config['AUDIO_API_KEY']
-        logger.info(f"📌 已重新加载配置: core_api={self.core_api_type}, model={self.model}, text_model={self.text_model}, vision_model={self.vision_model}")
+        
+        # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
+        (
+            _,
+            _,
+            _,
+            lanlan_basic_config_updated,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _
+        ) = self._config_manager.get_character_data()
+        old_voice_id = self.voice_id
+        self.voice_id = lanlan_basic_config_updated.get(self.lanlan_name, {}).get('voice_id', '')
+        if old_voice_id != self.voice_id:
+            logger.info(f"🔄 voice_id已更新: '{old_voice_id}' -> '{self.voice_id}'")
+        
+        logger.info(f"📌 已重新加载配置: core_api={self.core_api_type}, model={self.model}, text_model={self.text_model}, vision_model={self.vision_model}, voice_id={self.voice_id}")
         
         # 重置TTS缓存状态
         async with self.tts_cache_lock:
@@ -844,7 +863,26 @@ class LLMSessionManager:
             self.openrouter_url = core_config['OPENROUTER_URL']
             self.openrouter_api_key = core_config['OPENROUTER_API_KEY']
             self.audio_api_key = core_config['AUDIO_API_KEY']
-            logger.info(f"🔄 热切换准备: 已重新加载配置")
+            
+            # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
+            (
+                _,
+                _,
+                _,
+                lanlan_basic_config_updated,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _
+            ) = self._config_manager.get_character_data()
+            old_voice_id = self.voice_id
+            self.voice_id = lanlan_basic_config_updated.get(self.lanlan_name, {}).get('voice_id', '')
+            if old_voice_id != self.voice_id:
+                logger.info(f"🔄 热切换准备: voice_id已更新: '{old_voice_id}' -> '{self.voice_id}'")
+            
+            logger.info(f"🔄 热切换准备: 已重新加载配置, voice_id={self.voice_id}")
             
             # 创建新的pending session
             self.pending_session = OmniRealtimeClient(
