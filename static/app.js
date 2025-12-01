@@ -273,6 +273,14 @@ function init_app(){
                         console.log('模式切换中，忽略"已离开"状态消息');
                         return;
                     }
+                    
+                    // 检测严重错误，自动隐藏准备提示（兜底机制）
+                    const criticalErrorKeywords = ['连续失败', '已停止', '自动重试', '崩溃', '欠费', 'API Key被'];
+                    if (criticalErrorKeywords.some(keyword => response.message.includes(keyword))) {
+                        console.log('检测到严重错误，隐藏准备提示');
+                        hideVoicePreparingToast();
+                    }
+                    
                     // 翻译后端发送的状态消息
                     const translatedMessage = window.translateStatusMessage ? window.translateStatusMessage(response.message) : response.message;
                     showStatusToast(translatedMessage, 4000);
@@ -328,6 +336,7 @@ function init_app(){
                                     showStatusToast(window.t ? window.t('app.restartComplete', {name: lanlan_config.lanlan_name}) : `重启完成，${lanlan_config.lanlan_name}回来了！`, 4000);
                                 } catch (error) {
                                     console.error("重启时出错:", error);
+                                    hideVoicePreparingToast(); // 确保重启失败时隐藏准备提示
                                     showStatusToast(window.t ? window.t('app.restartFailed', {error: error.message}) : `重启失败: ${error.message}`, 5000);
                                 }
                             }, 7500); // 7.5秒后执行
@@ -353,8 +362,17 @@ function init_app(){
                     if (proactiveChatEnabled && !isRecording) {
                         resetProactiveChatBackoff();
                     }
+                } else if (response.type === 'session_preparing') {
+                    console.log('收到session_preparing事件，模式:', response.input_mode);
+                    // 显示持续性的准备中提示
+                    const preparingMessage = response.input_mode === 'text' 
+                        ? (window.t ? window.t('app.textSystemPreparing') : '文本系统准备中，请稍候...')
+                        : (window.t ? window.t('app.voiceSystemPreparing') : '语音系统准备中，请稍候...');
+                    showVoicePreparingToast(preparingMessage);
                 } else if (response.type === 'session_started') {
                     console.log('收到session_started事件，模式:', response.input_mode);
+                    // 隐藏准备中提示
+                    hideVoicePreparingToast();
                     // 解析 session_started Promise
                     if (sessionStartedResolver) {
                         // 清除可能存在的超时定时器（通过全局变量）
@@ -1438,6 +1456,7 @@ function init_app(){
                 showStatusToast(window.t ? window.t('app.textChattingShort') : '正在文本聊天中', 2000);
             } catch (error) {
                 console.error('启动文本session失败:', error);
+                hideVoicePreparingToast(); // 确保失败时隐藏准备提示
                 showStatusToast(window.t ? window.t('app.startFailed', {error: error.message}) : `启动失败: ${error.message}`, 5000);
                 
                 // 重新启用按钮，允许用户重试
@@ -2783,6 +2802,11 @@ function init_app(){
         
         console.log('[App] Agent开关元素已找到，开始绑定事件监听器');
         
+        // 【修复频繁开关竞态问题】操作序列号，用于取消过期的异步操作
+        let masterOperationSeq = 0;
+        let keyboardOperationSeq = 0;
+        let mcpOperationSeq = 0;
+        
         // 标记这些 checkbox 有外部处理器（用于 live2d-ui.js 中的 _processing 标志管理）
         agentMasterCheckbox._hasExternalHandler = true;
         if (agentKeyboardCheckbox) agentKeyboardCheckbox._hasExternalHandler = true;
@@ -2821,7 +2845,19 @@ function init_app(){
         
         // Agent总开关逻辑
         agentMasterCheckbox.addEventListener('change', async () => {
-            console.log('[App] Agent总开关状态变化:', agentMasterCheckbox.checked);
+            // 【修复频繁开关竞态】每次操作递增序列号
+            const currentSeq = ++masterOperationSeq;
+            const isChecked = agentMasterCheckbox.checked;
+            console.log('[App] Agent总开关状态变化:', isChecked, '序列号:', currentSeq);
+            
+            // 辅助函数：检查当前操作是否已过期
+            const isExpired = () => {
+                if (currentSeq !== masterOperationSeq) {
+                    console.log('[App] 总开关操作已过期，序列号:', currentSeq, '当前:', masterOperationSeq);
+                    return true;
+                }
+                return false;
+            };
             
             // _processing 标志已在 live2d-ui.js 的点击处理中设置
             // 这里确保标志存在（以防 change 事件来自其他来源）
@@ -2830,7 +2866,7 @@ function init_app(){
             }
             
             try {
-                if (agentMasterCheckbox.checked) {
+                if (isChecked) {
                     // 【兜底】查询期间禁用总开关，防止重复点击
                     agentMasterCheckbox.disabled = true;
                     agentMasterCheckbox.title = window.t ? window.t('settings.toggles.checking') : '查询中...';
@@ -2842,6 +2878,8 @@ function init_app(){
                         healthOk = await checkToolServerHealth();
                         if (!healthOk) throw new Error('tool server down');
                     } catch (e) {
+                        // 【竞态检查】操作过期则直接返回
+                        if (isExpired()) return;
                         setFloatingAgentStatus('Agent服务器未启动');
                         agentMasterCheckbox.checked = false;
                         agentMasterCheckbox.disabled = false;
@@ -2849,6 +2887,9 @@ function init_app(){
                         syncCheckboxUI(agentMasterCheckbox);
                         return;
                     }
+                    
+                    // 【竞态检查】操作过期则直接返回
+                    if (isExpired()) return;
                     
                     // 查询成功，恢复总开关可交互状态
                     agentMasterCheckbox.disabled = false;
@@ -2873,9 +2914,10 @@ function init_app(){
                         (async () => {
                             if (!agentKeyboardCheckbox) return;
                             const available = await checkCapability('computer_use', false);
-                            // 【防竞态】检查完成后再次确认总开关仍然开启
-                            if (!agentMasterCheckbox.checked) {
+                            // 【防竞态】检查操作序列号和总开关状态
+                            if (isExpired() || !agentMasterCheckbox.checked) {
                                 agentKeyboardCheckbox.disabled = true;
+                                agentKeyboardCheckbox.checked = false;
                                 syncCheckboxUI(agentKeyboardCheckbox);
                                 return;
                             }
@@ -2886,9 +2928,10 @@ function init_app(){
                         (async () => {
                             if (!agentMcpCheckbox) return;
                             const available = await checkCapability('mcp', false);
-                            // 【防竞态】检查完成后再次确认总开关仍然开启
-                            if (!agentMasterCheckbox.checked) {
+                            // 【防竞态】检查操作序列号和总开关状态
+                            if (isExpired() || !agentMasterCheckbox.checked) {
                                 agentMcpCheckbox.disabled = true;
+                                agentMcpCheckbox.checked = false;
                                 syncCheckboxUI(agentMcpCheckbox);
                                 return;
                             }
@@ -2897,6 +2940,9 @@ function init_app(){
                             syncCheckboxUI(agentMcpCheckbox);
                         })()
                     ]);
+                    
+                    // 【竞态检查】Promise.all 完成后再次检查
+                    if (isExpired()) return;
                     
                     try {
                         const r = await fetch('/api/agent/flags', {
@@ -2909,9 +2955,22 @@ function init_app(){
                         });
                         if (!r.ok) throw new Error('main_server rejected');
                         
-                        // 【防竞态】API请求完成后确认总开关仍然开启
-                        if (!agentMasterCheckbox.checked) {
-                            console.log('[App] API请求完成后总开关已关闭，不启动轮询');
+                        // 【竞态检查】API 请求完成后检查操作是否过期
+                        if (isExpired()) {
+                            console.log('[App] flags API 完成后操作已过期');
+                            return;
+                        }
+                        
+                        // 启用 analyzer（确保 agent 模式开启时 analyze API 可用）
+                        await fetch('/api/agent/admin/control', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({action: 'enable_analyzer'})
+                        });
+                        
+                        // 【防竞态】API请求完成后确认操作序列号和总开关状态
+                        if (isExpired() || !agentMasterCheckbox.checked) {
+                            console.log('[App] API请求完成后操作已过期或总开关已关闭，不启动轮询');
                             resetSubCheckboxes();
                             return;
                         }
@@ -2919,6 +2978,8 @@ function init_app(){
                         // 启动定时检查器
                         window.startAgentAvailabilityCheck();
                     } catch(e) {
+                        // 【竞态检查】错误处理前检查操作是否过期
+                        if (isExpired()) return;
                         agentMasterCheckbox.checked = false;
                         agentMasterCheckbox.disabled = false;
                         agentMasterCheckbox.title = window.t ? window.t('settings.toggles.agentMaster') : 'Agent总开关';
@@ -2929,27 +2990,34 @@ function init_app(){
                         setFloatingAgentStatus('开启失败');
                     }
                 } else {
-                    setFloatingAgentStatus('Agent模式已关闭');
-                    
-                    // 同步总开关自身的 UI
-                    syncCheckboxUI(agentMasterCheckbox);
-                    
+                    // 关闭操作：立即停止相关检查和轮询，然后进行清理
                     // 停止可用性定时检查器（但不影响弹窗打开时的连通性检查）
                     window.stopAgentAvailabilityCheck();
                     
                     // 停止任务轮询并隐藏 HUD
                     window.stopAgentTaskPolling();
                     
-                    // 重置子开关
+                    // 重置子开关（立即执行，不依赖异步结果）
                     resetSubCheckboxes();
                     
-                    // 停止所有任务并重置状态
+                    setFloatingAgentStatus('Agent模式已关闭');
+                    
+                    // 同步总开关自身的 UI
+                    syncCheckboxUI(agentMasterCheckbox);
+                    
+                    // 禁用 analyzer 并停止所有任务（disable_analyzer 会 cascade 调用 end_all）
                     try {
                         await fetch('/api/agent/admin/control', {
                             method: 'POST', 
                             headers: {'Content-Type': 'application/json'}, 
-                            body: JSON.stringify({action: 'end_all'})
+                            body: JSON.stringify({action: 'disable_analyzer'})
                         });
+                        
+                        // 【竞态检查】如果操作已过期，跳过后续请求
+                        if (isExpired()) {
+                            console.log('[App] 关闭操作已过期，跳过后续API调用');
+                            return;
+                        }
                         
                         await fetch('/api/agent/flags', {
                             method: 'POST', 
@@ -2960,7 +3028,10 @@ function init_app(){
                             })
                         });
                     } catch(e) {
-                        setFloatingAgentStatus('Agent模式已关闭（部分清理失败）');
+                        // 【竞态检查】错误处理前检查操作是否过期
+                        if (!isExpired()) {
+                            setFloatingAgentStatus('Agent模式已关闭（部分清理失败）');
+                        }
                     }
                 }
             } finally {
@@ -2969,24 +3040,30 @@ function init_app(){
             }
         });
         
-        // 子开关通用处理函数
-        const setupSubCheckbox = (checkbox, capability, flagKey, name) => {
+        // 子开关通用处理函数（使用闭包捕获对应的序列号变量）
+        const setupSubCheckbox = (checkbox, capability, flagKey, name, getSeq, setSeq) => {
             if (!checkbox) return;
             checkbox.addEventListener('change', async () => {
+                // 【修复频繁开关竞态】每次操作递增序列号
+                const currentSeq = setSeq();
+                const isChecked = checkbox.checked;
+                
+                // 辅助函数：检查当前操作是否已过期
+                const isExpired = () => {
+                    if (currentSeq !== getSeq()) {
+                        console.log(`[App] ${name}开关操作已过期，序列号:`, currentSeq, '当前:', getSeq());
+                        return true;
+                    }
+                    return false;
+                };
+                
                 // 如果是自动禁用触发的change事件，跳过处理（避免重复发送请求）
                 if (checkbox._autoDisabled) {
                     console.log(`[App] ${name}开关自动关闭，跳过change处理`);
                     return;
                 }
                 
-                // 如果正在处理中（且不是本次点击触发的），忽略
-                // 注意：_processing 可能已在 live2d-ui.js 的点击处理中设置
-                if (checkbox._processing && checkbox._processingChangeId) {
-                    console.log(`[App] ${name}开关正在处理中，忽略重复操作`);
-                    return;
-                }
-                
-                console.log(`[App] ${name}开关状态变化:`, checkbox.checked);
+                console.log(`[App] ${name}开关状态变化:`, isChecked, '序列号:', currentSeq);
                 if (!agentMasterCheckbox?.checked) {
                     checkbox.checked = false;
                     syncCheckboxUI(checkbox);
@@ -2998,17 +3075,15 @@ function init_app(){
                 if (!checkbox._processing) {
                     checkbox._processing = true;
                 }
-                // 标记当前正在处理的 change 事件
-                checkbox._processingChangeId = Date.now();
                 
                 try {
-                    const enabled = checkbox.checked;
+                    const enabled = isChecked;
                     if (enabled) {
                         const ok = await checkCapability(capability);
                         
-                        // 【防竞态】检查完成后再次确认总开关仍然开启
-                        if (!agentMasterCheckbox?.checked) {
-                            console.log(`[App] ${name}检查期间总开关已关闭，取消操作`);
+                        // 【防竞态】检查操作序列号和总开关状态
+                        if (isExpired() || !agentMasterCheckbox?.checked) {
+                            console.log(`[App] ${name}检查期间操作已过期或总开关已关闭，取消操作`);
                             checkbox.checked = false;
                             checkbox.disabled = true;
                             syncCheckboxUI(checkbox);
@@ -3035,9 +3110,9 @@ function init_app(){
                         });
                         if (!r.ok) throw new Error('main_server rejected');
                         
-                        // 【防竞态】请求完成后再次确认总开关状态
-                        if (!agentMasterCheckbox?.checked) {
-                            console.log(`[App] ${name}请求完成后总开关已关闭，强制关闭`);
+                        // 【防竞态】请求完成后检查操作序列号和总开关状态
+                        if (isExpired() || !agentMasterCheckbox?.checked) {
+                            console.log(`[App] ${name}请求完成后操作已过期或总开关已关闭，强制关闭`);
                             checkbox.checked = false;
                             checkbox.disabled = true;
                             syncCheckboxUI(checkbox);
@@ -3050,6 +3125,8 @@ function init_app(){
                             syncCheckboxUI(checkbox);
                         }
                     } catch(e) {
+                        // 【竞态检查】错误处理前检查操作是否过期
+                        if (isExpired()) return;
                         if (enabled) {
                             checkbox.checked = false;
                             syncCheckboxUI(checkbox);
@@ -3064,11 +3141,25 @@ function init_app(){
             });
         };
         
-        // 键鼠控制开关逻辑
-        setupSubCheckbox(agentKeyboardCheckbox, 'computer_use', 'computer_use_enabled', '键鼠控制');
+        // 键鼠控制开关逻辑（传入序列号的getter和setter）
+        setupSubCheckbox(
+            agentKeyboardCheckbox, 
+            'computer_use', 
+            'computer_use_enabled', 
+            '键鼠控制',
+            () => keyboardOperationSeq,
+            () => ++keyboardOperationSeq
+        );
         
-        // MCP工具开关逻辑
-        setupSubCheckbox(agentMcpCheckbox, 'mcp', 'mcp_enabled', 'MCP工具');
+        // MCP工具开关逻辑（传入序列号的getter和setter）
+        setupSubCheckbox(
+            agentMcpCheckbox, 
+            'mcp', 
+            'mcp_enabled', 
+            'MCP工具',
+            () => mcpOperationSeq,
+            () => ++mcpOperationSeq
+        );
         
         // 监听 Agent 弹窗打开事件，在弹窗显示时检查服务器状态
         window.addEventListener('live2d-agent-popup-opening', async () => {

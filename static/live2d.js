@@ -2031,12 +2031,46 @@ class Live2DManager {
                     toggleItem.style.background = 'transparent';
                 });
                 
+                // 存储 _updateStyle 供外部调用（与 live2d-ui.js 保持一致）
+                checkbox._updateStyle = updateStyle;
+                
                 // 点击切换（点击整个项目都可以切换）
+                // 添加防抖机制防止频繁点击导致状态混乱
                 toggleItem.addEventListener('click', (e) => {
                     if (checkbox.disabled) return;
+                    
+                    // 防止重复点击：使用防抖时间来适应异步操作
+                    if (checkbox._processing) {
+                        const elapsed = Date.now() - (checkbox._processingTime || 0);
+                        if (elapsed < 500) {  // 500ms 防抖，防止频繁点击
+                            console.log('[Live2D] Agent开关正在处理中，忽略重复点击:', toggle.id, '已过', elapsed, 'ms');
+                            e?.preventDefault();
+                            e?.stopPropagation();
+                            return;
+                        }
+                        // 超过500ms但仍在processing，可能是上次操作卡住了，允许新操作
+                        console.log('[Live2D] Agent开关上次操作可能超时，允许新操作:', toggle.id);
+                    }
+                    
+                    // 立即设置处理中标志
+                    checkbox._processing = true;
+                    checkbox._processingTime = Date.now();
+                    
                     checkbox.checked = !checkbox.checked;
                     checkbox.dispatchEvent(new Event('change', { bubbles: true }));
                     updateStyle();
+                    
+                    // 备用清除机制（增加超时时间以适应网络延迟）
+                    setTimeout(() => {
+                        if (checkbox._processing && Date.now() - checkbox._processingTime > 5000) {
+                            console.log('[Live2D] Agent开关备用清除机制触发:', toggle.id);
+                            checkbox._processing = false;
+                            checkbox._processingTime = null;
+                        }
+                    }, 5500);
+                    
+                    e?.preventDefault();
+                    e?.stopPropagation();
                 });
             });
         } else if (buttonId === 'settings') {

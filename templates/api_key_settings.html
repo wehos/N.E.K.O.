@@ -420,8 +420,8 @@
             <li><strong data-i18n="api.fullVersion">完整版（获取API Key）：</strong></li>
             <li style="margin-left: 20px;">1. <span data-i18n="api.step1">在阿里云注册账号并</span> <a href="https://myaccount.console.aliyun.com/overview" target="_blank" data-i18n="api.step1Link">完成实名认证</a></li>
             <li style="margin-left: 20px;">2. <span data-i18n="api.step2">访问阿里云百炼平台</span> <a href="https://bailian.console.aliyun.com/api-key?tab=model#/api-key" target="_blank" data-i18n="api.step2Link">API Key管理页面</a></li>
-            <li style="margin-left: 20px;" data-i18n="api.step3">3. 创建新的API Key并点击复制按钮</li>
-            <li style="margin-left: 20px;" data-i18n="api.step4">4. 将API Key粘贴到下方输入框中</li>
+            <li style="margin-left: 20px;">3. <span data-i18n="api.step3">创建新的API Key并点击复制按钮</span></li>
+            <li style="margin-left: 20px;">4. <span data-i18n="api.step4">将API Key粘贴到下方输入框中</span></li>
         </ul>
     </div>
 
@@ -550,6 +550,7 @@
                             <span data-i18n="api.mcpRouterTokenDescText">用于访问MCP Router服务的认证令牌，启用MCP功能时需要填写。如果您的MCP Router不需要认证，可以留空。</span>
                         </div>
                     </div>
+                    <span style="font-weight: normal; font-size: 0.9em; color: #666; display: block; margin-top: 4px;"><span data-i18n="api.mcpRouterNoteBefore">当前版本请自行获取并配置</span> <a href="https://mcp-router.net/" target="_blank" style="color: #4f8cff;">MCP Router</a><span data-i18n="api.mcpRouterNoteAfter">，后续版本会优化。</span></span>
                 </label>
                 <input type="text" id="mcpTokenInput" data-i18n-placeholder="api.mcpRouterTokenPlaceholder" placeholder="请输入MCP Router Token（可选）" value="" style="width: 100%; max-width: 600px; padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; font-size: 1rem; font-family: 'Courier New', monospace;">
             </div>
@@ -815,9 +816,10 @@ async function loadApiProviders() {
                         option.value = provider.key;
                         // 使用翻译键获取显示名称
                         const translationKey = `api.coreProviderNames.${provider.key}`;
-                        if (window.t && typeof window.t === 'function') {
+                        if (window.t) {
                             const translatedName = window.t(translationKey);
                             // 如果翻译键存在且不是键本身，使用翻译；否则使用原始名称
+                            console.log(translatedName);
                             option.textContent = (translatedName !== translationKey) ? translatedName : provider.name;
                         } else {
                             option.textContent = provider.name;
@@ -835,7 +837,7 @@ async function loadApiProviders() {
                         option.value = provider.key;
                         // 使用翻译键获取显示名称
                         const translationKey = `api.assistProviderNames.${provider.key}`;
-                        if (window.t && typeof window.t === 'function') {
+                        if (window.t) {
                             const translatedName = window.t(translationKey);
                             // 如果翻译键存在且不是键本身，使用翻译；否则使用原始名称
                             option.textContent = (translatedName !== translationKey) ? translatedName : provider.name;
@@ -1489,13 +1491,14 @@ function updateAssistApiRecommendation() {
     const assistApiTooltip = assistApiSelect.parentElement.querySelector('label .tooltip-content');
     if (assistApiTooltip) {
         assistApiTooltip.innerHTML = `
-            <strong>${window.t ? window.t('api.assistApiTooltipTitle') : '辅助API负责记忆管理和自定义语音：'}</strong><br>
-            • <strong>${window.t ? window.t('api.aliAssist') : '阿里'}</strong>：${window.t ? window.t('api.aliRecommended') : '推荐选择，支持自定义语音'}<br>
-            • <strong>${window.t ? window.t('api.glmAssist') : '智谱'}</strong>：${window.t ? window.t('api.glmMemoryFree') : '记忆管理永久免费，支持Agent模式'}<br>
-            • <strong>${window.t ? window.t('api.stepAssist') : '阶跃星辰'}</strong>：${window.t ? window.t('api.stepCheap') : '相对便宜'}<br>
-            • <strong>${window.t ? window.t('api.siliconAssist') : '硅基流动'}</strong>：${window.t ? window.t('api.siliconValue') : '性价比高'}<br>
-            • <strong>${window.t ? window.t('api.openaiAssist') : 'OpenAI'}</strong>：${window.t ? window.t('api.openaiMemoryStrong') : '记忆管理能力强'}<br>
-            <strong>${window.t ? window.t('api.onlyAliCustomVoice') : '⚠️注意：只有阿里支持自定义语音功能'}</strong><br>
+            <strong>${window.t ? window.t('api.assistApiTitle') : '辅助API负责记忆管理和自定义语音：'}</strong><br>
+            • <span>${window.t ? window.t('api.freeVersionAssist') : '免费版：完全免费，无需API Key，但不支持自定义语音'}</span><br>
+            • <span>${window.t ? window.t('api.aliAssist') : '阿里：推荐选择，支持自定义语音'}</span><br>
+            • <span>${window.t ? window.t('api.glmAssist') : '智谱：支持Agent模式'}</span><br>
+            • <span>${window.t ? window.t('api.stepAssist') : '阶跃星辰：价格相对便宜'}</span><br>
+            • <span>${window.t ? window.t('api.siliconAssist') : '硅基流动：性价比高'}</span><br>
+            • <span>${window.t ? window.t('api.openaiAssist') : 'OpenAI：记忆管理能力强'}</span><br>
+            <strong>${window.t ? window.t('api.assistApiNote') : '注意：只有阿里支持自定义语音功能'}</strong><br>
             <strong>${window.t ? window.t('api.currentSuggestion') : '💡当前建议：'}</strong>${recommendation}
         `;
     }
@@ -1738,6 +1741,15 @@ function initTooltips() {
     });
 }
 
+// 等待 i18n 初始化完成
+async function waitForI18n(timeout = 3000) {
+    const startTime = Date.now();
+    while (!window.t && Date.now() - startTime < timeout) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return !!window.t;
+}
+
 // 页面初始化函数 - 先加载配置再显示UI
 async function initializePage() {
     // 防止重复初始化
@@ -1753,6 +1765,9 @@ async function initializePage() {
         if (loadingOverlay) {
             loadingOverlay.style.display = 'flex';
         }
+        
+        // 等待 i18n 初始化完成
+        await waitForI18n();
         
         // 第一步：加载API服务商选项
         const providersLoaded = await loadApiProviders();

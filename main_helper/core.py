@@ -490,6 +490,9 @@ class LLMSessionManager:
         self.websocket = websocket
         self.input_mode = input_mode
         
+        # 立即通知前端系统正在准备（静默期开始）
+        await self.send_session_preparing(input_mode)
+        
         # 重新读取核心配置以支持热重载
         core_config = self._config_manager.get_core_config()
         self.model = core_config['CORE_MODEL']
@@ -501,7 +504,15 @@ class LLMSessionManager:
         self.openrouter_url = core_config['OPENROUTER_URL']
         self.openrouter_api_key = core_config['OPENROUTER_API_KEY']
         self.audio_api_key = core_config['AUDIO_API_KEY']
-        logger.info(f"📌 已重新加载配置: core_api={self.core_api_type}, model={self.model}, text_model={self.text_model}, vision_model={self.vision_model}")
+        
+        # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
+        _,_,_,lanlan_basic_config_updated,_,_,_,_,_,_ = self._config_manager.get_character_data()
+        old_voice_id = self.voice_id
+        self.voice_id = lanlan_basic_config_updated.get(self.lanlan_name, {}).get('voice_id', '')
+        if old_voice_id != self.voice_id:
+            logger.info(f"🔄 voice_id已更新: '{old_voice_id}' -> '{self.voice_id}'")
+        
+        logger.info(f"📌 已重新加载配置: core_api={self.core_api_type}, model={self.model}, text_model={self.text_model}, vision_model={self.vision_model}, voice_id={self.voice_id}")
         
         # 重置TTS缓存状态
         async with self.tts_cache_lock:
@@ -669,6 +680,7 @@ class LLMSessionManager:
                     on_connection_error=self.handle_connection_error,
                     on_response_done=self.handle_response_complete,
                     on_silence_timeout=self.handle_silence_timeout,
+                    on_status_message=self.send_status,
                     api_type=self.core_api_type  # 传入API类型，用于判断是否启用静默超时
                 )
 
@@ -676,6 +688,7 @@ class LLMSessionManager:
             if self.session:
                 await self.session.connect(initial_prompt, native_audio = not self.use_tts)
                 logger.info(f"✅ LLM Session 已连接")
+                print(initial_prompt)
                 return True
             else:
                 raise Exception("Session not initialized")
@@ -844,7 +857,15 @@ class LLMSessionManager:
             self.openrouter_url = core_config['OPENROUTER_URL']
             self.openrouter_api_key = core_config['OPENROUTER_API_KEY']
             self.audio_api_key = core_config['AUDIO_API_KEY']
-            logger.info(f"🔄 热切换准备: 已重新加载配置")
+            
+            # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
+            _,_,_,lanlan_basic_config_updated,_,_,_,_,_,_ = self._config_manager.get_character_data()
+            old_voice_id = self.voice_id
+            self.voice_id = lanlan_basic_config_updated.get(self.lanlan_name, {}).get('voice_id', '')
+            if old_voice_id != self.voice_id:
+                logger.info(f"🔄 热切换准备: voice_id已更新: '{old_voice_id}' -> '{self.voice_id}'")
+            
+            logger.info(f"🔄 热切换准备: 已重新加载配置, voice_id={self.voice_id}")
             
             # 创建新的pending session
             self.pending_session = OmniRealtimeClient(
@@ -858,6 +879,7 @@ class LLMSessionManager:
                 on_output_transcript=self.handle_output_transcript,
                 on_connection_error=self.handle_connection_error,
                 on_response_done=self.handle_response_complete,
+                on_status_message=self.send_status,
                 api_type=self.core_api_type  # 传入API类型，用于判断是否启用静默超时
             )
             
@@ -1338,6 +1360,16 @@ class LLMSessionManager:
             pass
         except Exception as e:
             logger.error(f"💥 WS Send Status Error: {e}")
+    
+    async def send_session_preparing(self, input_mode: str): # 通知前端session正在准备（静默期）
+        try:
+            if self.websocket and hasattr(self.websocket, 'client_state') and self.websocket.client_state == self.websocket.client_state.CONNECTED:
+                data = json.dumps({"type": "session_preparing", "input_mode": input_mode})
+                await self.websocket.send_text(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"💥 WS Send Session Preparing Error: {e}")
     
     async def send_session_started(self, input_mode: str): # 通知前端session已启动
         try:

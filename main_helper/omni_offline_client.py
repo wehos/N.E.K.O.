@@ -74,7 +74,7 @@ class OmniOfflineClient:
             model=self.model,
             base_url=self.base_url,
             api_key=self.api_key,
-            temperature=0.8,
+            temperature=1.0,
             streaming=True
         )
         
@@ -119,7 +119,7 @@ class OmniOfflineClient:
                 model=self.model,
                 base_url=self.base_url,
                 api_key=self.api_key,
-                temperature=0.8,
+                temperature=1.0,
                 streaming=True,
                 extra_body={"enable_thinking": False} if self.model in MODELS_WITH_EXTRA_BODY else None
             )

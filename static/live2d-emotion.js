@@ -205,8 +205,15 @@ Live2DManager.prototype.playExpression = async function(emotion, specifiedExpres
         
         // 方法2: 回退到手动参数设置
         console.log('使用手动参数设置播放expression');
+        // 口型参数列表，手动设置时跳过以避免覆盖lipsync
+        const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
         if (expressionData.Parameters) {
             for (const param of expressionData.Parameters) {
+                // 跳过口型参数，避免覆盖lipsync
+                if (lipSyncParams.includes(param.Id)) {
+                    console.log(`跳过口型参数: ${param.Id}，避免覆盖lipsync`);
+                    continue;
+                }
                 try {
                     this.currentModel.internalModel.coreModel.setParameterValueById(param.Id, param.Value);
                 } catch (paramError) {
@@ -692,25 +699,29 @@ Live2DManager.prototype.applyPersistentExpressionsNative = async function() {
         try {
             const maybe = await this.currentModel.expression(name);
             if (!maybe && this.persistentExpressionParamsByName && Array.isArray(this.persistentExpressionParamsByName[name])) {
-                // 回退：手动设置参数
+                // 回退：手动设置参数（跳过口型参数以避免覆盖lipsync）
                 try {
                     const params = this.persistentExpressionParamsByName[name];
                     const core = this.currentModel.internalModel && this.currentModel.internalModel.coreModel;
+                    const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
                     if (core) {
                         for (const p of params) {
+                            if (lipSyncParams.includes(p.Id)) continue;
                             try { core.setParameterValueById(p.Id, p.Value); } catch (_) {}
                         }
                     }
                 } catch (_) {}
             }
         } catch (e) {
-            // 名称可能未注册，尝试回退到手动设置
+            // 名称可能未注册，尝试回退到手动设置（跳过口型参数以避免覆盖lipsync）
             try {
                 if (this.persistentExpressionParamsByName && Array.isArray(this.persistentExpressionParamsByName[name])) {
                     const params = this.persistentExpressionParamsByName[name];
                     const core = this.currentModel.internalModel && this.currentModel.internalModel.coreModel;
+                    const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
                     if (core) {
                         for (const p of params) {
+                            if (lipSyncParams.includes(p.Id)) continue;
                             try { core.setParameterValueById(p.Id, p.Value); } catch (_) {}
                         }
                     }

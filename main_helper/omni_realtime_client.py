@@ -73,6 +73,7 @@ class OmniRealtimeClient:
         on_connection_error: Optional[Callable[[str], Awaitable[None]]] = None,
         on_response_done: Optional[Callable[[], Awaitable[None]]] = None,
         on_silence_timeout: Optional[Callable[[], Awaitable[None]]] = None,
+        on_status_message: Optional[Callable[[str], Awaitable[None]]] = None,
         extra_event_handlers: Optional[Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]]] = None,
         api_type: Optional[str] = None
     ):
@@ -91,6 +92,7 @@ class OmniRealtimeClient:
         self.on_connection_error = on_connection_error
         self.on_response_done = on_response_done
         self.on_silence_timeout = on_silence_timeout
+        self.on_status_message = on_status_message
         self.extra_event_handlers = extra_event_handlers or {}
 
         # Track current response state
@@ -217,7 +219,7 @@ class OmniRealtimeClient:
                         "prefix_padding_ms":300,
                         "silence_duration_ms": 500
                     },
-                    "temperature": 0.4
+                    "temperature": 1.0
                 })
             elif "gpt" in self.model:
                 await self.update_session({
@@ -371,7 +373,12 @@ class OmniRealtimeClient:
         except Exception as e:
             logger.error(f"Error analyzing image with vision model: {e}")
             self._image_being_analyzed = False
-            return ""
+            # 检测内容审查错误并发送中文提示到前端（不关闭session）
+            error_str = str(e)
+            if 'censorship' in error_str:
+                if self.on_status_message:
+                    await self.on_status_message("⚠️ 图片内容被审查系统拦截，请尝试更换图片或内容。")
+            return "图片识别发生严重错误！"
     
     async def stream_image(self, image_b64: str) -> None:
         """Stream raw image data to the API."""

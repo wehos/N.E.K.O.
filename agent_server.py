@@ -583,6 +583,9 @@ async def set_agent_flags(payload: Dict[str, Any]):
 # 3) 分析器模块：接收 cross-server 的对话片段，识别潜在任务，转发到规划器
 @app.post("/analyze_and_plan")
 async def analyze_and_plan(payload: Dict[str, Any]):
+    # 检查 analyzer 是否已启用（由 agent 总开关控制）
+    if not Modules.analyzer_enabled:
+        return {"success": False, "status": "analyzer_disabled", "message": "Analyzer is disabled"}
     if not Modules.analyzer or not Modules.planner:
         raise HTTPException(503, "Analyzer/Planner not ready")
     messages = (payload or {}).get("messages", [])
@@ -632,7 +635,8 @@ async def mcp_availability():
     if not Modules.planner:
         raise HTTPException(503, "Planner not ready")
     try:
-        caps = await Modules.planner.refresh_capabilities()
+        # 使用缓存检查可用性，避免每次都请求 MCP Router（缓存 TTL 10秒）
+        caps = await Modules.planner.refresh_capabilities(force_refresh=False)
         count = len(caps or {})
         ready = count > 0
         reasons = [] if ready else ["MCP router unreachable or no servers discovered"]
