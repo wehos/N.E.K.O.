@@ -719,12 +719,14 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
     
     async def _execute_user_plugin(self, task_id: str, up_decision: Any) -> TaskResult:
         """
-        Execute a user plugin via HTTP endpoint.
+        Execute a user plugin via HTTP endpoint or specific plugin_entry.
         up_decision is expected to have attributes: plugin_id, plugin_args, task_description
         """
         plugin_id = getattr(up_decision, "plugin_id", None)
         plugin_args = getattr(up_decision, "plugin_args", {}) or {}
         task_description = getattr(up_decision, "task_description", "")
+        # Optional: allow up_decision to specify a specific entry id
+        plugin_entry_id = getattr(up_decision, "plugin_entry_id", None) or plugin_args.pop("_entry", None)
         
         if not plugin_id:
             return TaskResult(
@@ -736,8 +738,6 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                 error="No plugin_id provided",
                 reason=getattr(up_decision, "reason", "")
             )
-        
-
         
         # Ensure we have a plugins list to search (use cached self.plugin_list as fallback)
         try:
@@ -752,18 +752,17 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
             except Exception:
                 plugins_list = []
         
-        # Find plugin entry in the resolved plugins list
-        plugin_entry = None
+        # Find plugin metadata in the resolved plugins list
+        plugin_meta = None
         for p in plugins_list:
             try:
                 if isinstance(p, dict) and p.get("id") == plugin_id:
-                    plugin_entry = p
+                    plugin_meta = p
                     break
             except Exception:
                 continue
         
-        if plugin_entry is None:
-            # Return a TaskResult indicating plugin not found instead of raising
+        if plugin_meta is None:
             return TaskResult(
                 task_id=task_id,
                 has_task=True,
@@ -776,35 +775,47 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                 reason=getattr(up_decision, "reason", "") or "Plugin not found"
             )
         
-        endpoint = plugin_entry.get("endpoint")
-        if not endpoint:
-            return TaskResult(
-                task_id=task_id,
-                has_task=True,
-                task_description=task_description,
-                execution_method='user_plugin',
-                success=False,
-                error=f"Plugin {plugin_id} has no endpoint defined",
-                tool_name=plugin_id,
-                tool_args=plugin_args,
-                reason=getattr(up_decision, "reason", "") or "No endpoint"
-            )
+        # If the plugin metadata includes entries, find the matching entry (by id) and prefer calling trigger with entry context
+        selected_entry = None
+        try:
+            entries = plugin_meta.get("entries", []) or []
+            if plugin_entry_id:
+                for e in entries:
+                    if e.get("id") == plugin_entry_id:
+                        selected_entry = e
+                        break
+            else:
+                # If there is exactly one entry and plugin_args contains keys matching its schema, pick it
+                if len(entries) == 1:
+                    selected_entry = entries[0]
+        except Exception:
+            entries = []
         
-        # Instead of calling the plugin endpoint directly, route via the user_plugin_server /plugin/trigger
+        # Route via /plugin/trigger; include entry id in args when specified so plugin server can use it
         trigger_endpoint = f"http://localhost:{USER_PLUGIN_SERVER_PORT}/plugin/trigger"
         trigger_body = {"task_id": task_id, "plugin_id": plugin_id, "args": plugin_args}
+        if selected_entry and selected_entry.get("id"):
+            trigger_body["args"] = trigger_body.get("args", {})
+            trigger_body["args"]["_entry"] = selected_entry.get("id")
+        
         logger.info(f"[TaskExecutor] POST to plugin trigger {trigger_endpoint} with body: {trigger_body}")
         try:
             import httpx
             async with httpx.AsyncClient(timeout=5.0) as client:
                 r = await client.post(trigger_endpoint, json=trigger_body)
-                # Treat 2xx as accepted. plugin_server currently enqueues for async processing.
+                # Treat 2xx as accepted. plugin_server may return plugin and entry info when calling trigger with _entry
                 if 200 <= r.status_code < 300:
                     try:
                         data = r.json()
                     except Exception:
                         data = {"raw_text": r.text}
                     logger.info(f"[TaskExecutor] ✅ Trigger accepted for plugin {plugin_id}: {data}")
+                    # If plugin server returned executed entry info, expose plugin name and entry id in result
+                    plugin_name = data.get("plugin_id") or plugin_id
+                    entry_id = None
+                    # some trigger responses may include 'executed_entry' or 'entry_id'
+                    if isinstance(data, dict):
+                        entry_id = data.get("executed_entry") or data.get("entry_id") or (trigger_body.get("args") or {}).get("_entry")
                     # Return a TaskResult indicating the plugin task was accepted (async)
                     return TaskResult(
                         task_id=task_id,
@@ -813,8 +824,8 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                         execution_method='user_plugin',
                         success=False,  # async accepted, execution pending
                         result={"accepted": True, "trigger_response": data},
-                        tool_name=plugin_id,
-                        tool_args=plugin_args,
+                        tool_name=plugin_name,
+                        tool_args={"entry_id": entry_id, **(plugin_args or {})} if isinstance(plugin_args, dict) else plugin_args,
                         reason=getattr(up_decision, "reason", "") or "trigger_accepted"
                     )
                 else:
@@ -845,6 +856,14 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                 tool_args=plugin_args,
                 reason=getattr(up_decision, "reason", "")
             )
+
+    async def execute_user_plugin_direct(self, task_id: str, plugin_id: str, plugin_args: Dict[str, Any], entry_id: Optional[str] = None) -> TaskResult:
+        """
+        Directly execute a plugin entry by calling /plugin/trigger with explicit plugin_id and optional entry_id.
+        This is intended for agent_server to call when it wants to trigger a plugin_entry immediately.
+        """
+        up_decision_stub = type("UP", (), {"plugin_id": plugin_id, "plugin_args": plugin_args, "task_description": f"Direct plugin call {plugin_id}", "plugin_entry_id": entry_id, "reason": "direct_call"})
+        return await self._execute_user_plugin(task_id=task_id, up_decision=up_decision_stub)
     
     async def refresh_capabilities(self) -> Dict[str, Dict[str, Any]]:
         """刷新并返回 MCP 工具能力列表"""

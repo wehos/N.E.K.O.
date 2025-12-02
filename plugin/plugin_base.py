@@ -1,7 +1,7 @@
 # neko_plugin_core/plugin_base.py
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-
+from .event_base import EventHandler, EventMeta
 NEKO_PLUGIN_META_ATTR = "__neko_plugin_meta__"
 NEKO_PLUGIN_TAG = "__neko_plugin__"
 
@@ -23,17 +23,16 @@ class NekoPluginBase:
         schema = getattr(self, "input_schema", None)
         return schema or {}
 
-    def collect_entries(self) -> Dict[str, "Entry"]:
+    def collect_entries(self) -> Dict[str, "EventHandler"]:
         """
         默认实现：扫描自身方法，把带入口标记的都收集起来。
         （注意：这是插件内部调用的，不是服务器在外面乱扫全模块）
         """
-        from .entry_base import Entry, EntryMeta
 
-        entries: Dict[str, Entry] = {}
+        entries: Dict[str, EventHandler] = {}
         for attr_name in dir(self):
             value = getattr(self, attr_name)
-            meta: EntryMeta | None = getattr(value, "__neko_entry_meta__", None)
+            meta: EventMeta | None = getattr(value, "__neko_entry_meta__", None)
             if meta:
-                entries[meta.id] = Entry(meta=meta, handler=value)
+                entries[meta.id] = EventHandler(meta=meta, handler=value)
         return entries
