@@ -790,80 +790,51 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                 reason=getattr(up_decision, "reason", "") or "No endpoint"
             )
         
-        logger.info(f"[TaskExecutor] Calling user plugin {plugin_id} at {endpoint} with args: {plugin_args}")
-        
+        # Instead of calling the plugin endpoint directly, route via the user_plugin_server /plugin/trigger
+        trigger_endpoint = f"http://localhost:{USER_PLUGIN_SERVER_PORT}/plugin/trigger"
+        trigger_body = {"task_id": task_id, "plugin_id": plugin_id, "args": plugin_args}
+        logger.info(f"[TaskExecutor] POST to plugin trigger {trigger_endpoint} with body: {trigger_body}")
         try:
             import httpx
             async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.post(endpoint, json={"task_id": task_id, "args": plugin_args})
-                if r.status_code >= 200 and r.status_code < 300:
+                r = await client.post(trigger_endpoint, json=trigger_body)
+                # Treat 2xx as accepted. plugin_server currently enqueues for async processing.
+                if 200 <= r.status_code < 300:
                     try:
                         data = r.json()
                     except Exception:
                         data = {"raw_text": r.text}
-                    logger.info(f"[TaskExecutor] ✅ Plugin {plugin_id} returned success")
-                    task_result = TaskResult(
+                    logger.info(f"[TaskExecutor] ✅ Trigger accepted for plugin {plugin_id}: {data}")
+                    # Return a TaskResult indicating the plugin task was accepted (async)
+                    return TaskResult(
                         task_id=task_id,
                         has_task=True,
                         task_description=task_description,
                         execution_method='user_plugin',
-                        success=True,
-                        result=data,
+                        success=False,  # async accepted, execution pending
+                        result={"accepted": True, "trigger_response": data},
                         tool_name=plugin_id,
                         tool_args=plugin_args,
-                        reason=getattr(up_decision, "reason", "")
+                        reason=getattr(up_decision, "reason", "") or "trigger_accepted"
                     )
-                    # Structured log for TaskResult (user_plugin)
-                    try:
-                        res_preview = str(task_result.result) if task_result.result is not None else ""
-                        if len(res_preview) > 800:
-                            res_preview = res_preview[:800] + "...(truncated)"
-                        logger.info("TaskExecutor-OUT: %s", json.dumps({
-                            "task_id": task_result.task_id,
-                            "execution_method": task_result.execution_method,
-                            "success": task_result.success,
-                            "reason": task_result.reason,
-                            "tool_name": task_result.tool_name,
-                            "tool_args": task_result.tool_args,
-                            "result_preview": res_preview
-                        }, ensure_ascii=False))
-                    except Exception:
-                        logger.info("TaskExecutor-OUT: (failed to serialize TaskResult for user_plugin)")
-                    return task_result
                 else:
                     text = r.text
-                    logger.error(f"[TaskExecutor] ❌ Plugin {plugin_id} returned status {r.status_code}: {text}")
-                    task_result = TaskResult(
+                    logger.error(f"[TaskExecutor] ❌ Trigger endpoint returned status {r.status_code}: {text}")
+                    return TaskResult(
                         task_id=task_id,
                         has_task=True,
                         task_description=task_description,
                         execution_method='user_plugin',
                         success=False,
-                        error=f"Plugin returned status {r.status_code}",
-                        result={"status_code": r.status_code, "text": r.text},
+                        error=f"Trigger endpoint returned status {r.status_code}",
+                        result={"status_code": r.status_code, "text": text},
                         tool_name=plugin_id,
                         tool_args=plugin_args,
-                        reason=getattr(up_decision, "reason", "")
+                        reason=getattr(up_decision, "reason", "") or "trigger_failed"
                     )
-                    try:
-                        res_preview = str(task_result.result) if task_result.result is not None else ""
-                        if len(res_preview) > 800:
-                            res_preview = res_preview[:800] + "...(truncated)"
-                        logger.info("TaskExecutor-OUT: %s", json.dumps({
-                            "task_id": task_result.task_id,
-                            "execution_method": task_result.execution_method,
-                            "success": task_result.success,
-                            "reason": task_result.reason,
-                            "tool_name": task_result.tool_name,
-                            "tool_args": task_result.tool_args,
-                            "result_preview": res_preview
-                        }, ensure_ascii=False))
-                    except Exception:
-                        logger.info("TaskExecutor-OUT: (failed to serialize TaskResult for user_plugin failure)")
-                    return task_result
         except Exception as e:
-            logger.error(f"[TaskExecutor] Plugin call error: {e}")
-            task_result = TaskResult(
+            logger.error(f"[TaskExecutor] Trigger call error: {e}")
+            return TaskResult(
                 task_id=task_id,
                 has_task=True,
                 task_description=task_description,
@@ -874,22 +845,6 @@ VERY IMPORTANT: Return the JSON object only, with no surrounding text.
                 tool_args=plugin_args,
                 reason=getattr(up_decision, "reason", "")
             )
-            try:
-                res_preview = str(task_result.result) if task_result.result is not None else ""
-                if len(res_preview) > 800:
-                    res_preview = res_preview[:800] + "...(truncated)"
-                logger.info("TaskExecutor-OUT: %s", json.dumps({
-                    "task_id": task_result.task_id,
-                    "execution_method": task_result.execution_method,
-                    "success": task_result.success,
-                    "reason": task_result.reason,
-                    "tool_name": task_result.tool_name,
-                    "tool_args": task_result.tool_args,
-                    "result_preview": res_preview
-                }, ensure_ascii=False))
-            except Exception:
-                logger.info("TaskExecutor-OUT: (failed to serialize TaskResult for plugin exception)")
-            return task_result
     
     async def refresh_capabilities(self) -> Dict[str, Dict[str, Any]]:
         """刷新并返回 MCP 工具能力列表"""

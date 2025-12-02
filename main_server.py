@@ -61,7 +61,7 @@ from dashscope.audio.tts_v2 import VoiceEnrollmentService
 import httpx
 import pathlib, wave
 from openai import AsyncOpenAI
-from config import MAIN_SERVER_PORT, MONITOR_SERVER_PORT, MEMORY_SERVER_PORT, MODELS_WITH_EXTRA_BODY, TOOL_SERVER_PORT
+from config import MAIN_SERVER_PORT, MONITOR_SERVER_PORT, MEMORY_SERVER_PORT, MODELS_WITH_EXTRA_BODY, TOOL_SERVER_PORT,USER_PLUGIN_SERVER_PORT
 from config.prompts_sys import emotion_analysis_prompt, proactive_chat_prompt
 import glob
 from utils.config_manager import get_config_manager
@@ -5099,13 +5099,13 @@ async def proxy_mcp_availability():
 
 @app.get('/api/agent/user_plugin/availability')
 async def proxy_up_availability():
-    return JSONResponse({"ready":True, "reasons": ["test-233"]}, status_code=200)
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
             r = await client.get(f"http://localhost:{USER_PLUGIN_SERVER_PORT}/available")
-            if not r.is_success:
+            if r.is_success:
+                return JSONResponse({"ready":True, "reasons": ["test-233"]}, status_code=200)
+            else:
                 return JSONResponse({"ready": False, "reasons": [f"tool_server responded {r.status_code}"]}, status_code=502)
-            return r.json()
     except Exception as e:
         return JSONResponse({"ready": False, "reasons": [f"proxy error: {e}"]}, status_code=502)
 
