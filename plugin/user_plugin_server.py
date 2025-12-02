@@ -5,6 +5,16 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from config import USER_PLUGIN_SERVER_PORT
+from pathlib import Path
+import importlib
+import inspect
+
+# Python 3.11 有 tomllib；低版本可用 tomli 兼容
+try:
+    import tomllib  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[no-redef]
+
 app = FastAPI(title="N.E.K.O User Plugin Server")
 
 logger = logging.getLogger("user_plugin_server")
@@ -14,7 +24,10 @@ logging.basicConfig(level=logging.INFO)
 # { "id": str, "name": str, "description": str, "endpoint": str, "input_schema": dict }
 # Registration endpoints are intentionally not implemented now.
 _plugins: Dict[str, Dict[str, Any]] = {}
-
+# In-memory plugin instances (id -> instance)
+_plugin_instances: Dict[str, Any] = {}
+# Where to look for plugin.toml files: ./plugins/<any>/plugin.toml
+PLUGIN_CONFIG_ROOT = Path(__file__).parent / "plugins"
 # Simple bounded in-memory event queue for inspection
 EVENT_QUEUE_MAX = 1000
 _event_queue: asyncio.Queue = asyncio.Queue(maxsize=EVENT_QUEUE_MAX)
@@ -35,29 +48,34 @@ async def available():
         "plugins_count": len(_plugins),
         "time": _now_iso()
     }
-
 @app.get("/plugins")
 async def list_plugins():
     """
     Return the list of known plugins.
-    Each plugin item contains at least: id, name, description, input_schema, endpoint (if any).
-    If registry is empty, expose a minimal test plugin so task_executor can run a simple end-to-end test.
+    If registry is empty, expose a minimal test plugin so task_executor
+    can run a simple end-to-end test (backward-compatible fallback).
     """
     try:
-        # If no plugins registered, expose a simple test plugin for local testing (testUserPlugin)
-        # if not _plugins:
-        test_plugin = {
-                "id": "testPlugin",
-                "name": "Test Plugin",
-                "description": "testUserPlugin: minimal plugin used for local testing — will respond with an ERROR-level notice when called",
-                "endpoint": f"http://localhost:{USER_PLUGIN_SERVER_PORT}/plugin/testPlugin",
-                "input_schema": {"type": "object", "properties": {"message": {"type": "string"}}}}
-        return [test_plugin]
-        #return {"plugins": list(_plugins.values()), "count": len(_plugins)}
+        if _plugins:
+            logger.info("加载插件列表成功")
+            # 已加载的插件（来自 TOML），直接返回
+            return list(_plugins.values())
+
+        # # 兼容旧行为：如果没有任何插件配置，就提供一个内置 testPlugin
+        # test_plugin = {
+        #     "id": "testPlugin",
+        #     "name": "Test Plugin",
+        #     "description": "testUserPlugin: minimal plugin used for local testing — will respond with an ERROR-level notice when called",
+        #     "endpoint": f"http://localhost:{USER_PLUGIN_SERVER_PORT}/plugin/testPlugin",
+        #     "input_schema": {
+        #         "type": "object",
+        #         "properties": {"message": {"type": "string"}}
+        #     },
+        # }
+        # return [test_plugin]
     except Exception as e:
         logger.exception("Failed to list plugins")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # Utility to allow other parts of the application (same process) to query plugin list
 def get_plugins() -> List[Dict[str, Any]]:
@@ -72,6 +90,69 @@ def _register_plugin(plugin: Dict[str, Any]) -> None:
         raise ValueError("plugin must have id")
     _plugins[pid] = plugin
 
+def _load_plugins_from_toml() -> None:
+    """
+    扫描 ./plugins/*/plugin.toml，按配置加载插件类并实例化。
+    每个 plugin.toml 形如：
+
+        [plugin]
+        id = "testPlugin"
+        name = "Test Plugin"
+        description = "Minimal plugin used for local testing"
+        version = "0.1.0"
+        entry = "plugins.hello:HelloPlugin"
+    """
+    if not PLUGIN_CONFIG_ROOT.exists():
+        logger.info("No plugin config directory %s, skipping TOML loading", PLUGIN_CONFIG_ROOT)
+        return
+
+    logger.info("Loading plugins from %s", PLUGIN_CONFIG_ROOT)
+    for toml_path in PLUGIN_CONFIG_ROOT.glob("*/plugin.toml"):
+        try:
+            with toml_path.open("rb") as f:
+                conf = tomllib.load(f)
+            pdata = conf.get("plugin") or {}
+            pid = pdata.get("id")
+            if not pid:
+                logger.warning("plugin.toml %s missing [plugin].id, skipping", toml_path)
+                continue
+
+            name = pdata.get("name", pid)
+            desc = pdata.get("description", "")
+            version = pdata.get("version", "0.1.0")
+            entry = pdata.get("entry")
+            if not entry or ":" not in entry:
+                logger.warning("plugin.toml %s has invalid entry=%r, skipping", toml_path, entry)
+                continue
+
+            module_path, class_name = entry.split(":", 1)
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+
+            # 实例化插件；如果将来想传 ctx，可以改成 cls(ctx)
+            instance = cls()
+
+            # 插件 HTTP endpoint 统一为 /plugin/<id>
+            endpoint = f"http://localhost:{USER_PLUGIN_SERVER_PORT}/plugin/{pid}"
+
+            meta = {
+                "id": pid,
+                "name": name,
+                "description": desc,
+                "version": version,
+                "endpoint": endpoint,
+                # 短期：如果插件类上有 input_schema 属性，就用；否则给个空 schema
+                "input_schema": getattr(instance, "input_schema", {}) or {
+                    "type": "object",
+                    "properties": {}
+                },
+            }
+
+            _plugin_instances[pid] = instance
+            _register_plugin(meta)
+            logger.info("Loaded plugin %s from %s (%s)", pid, toml_path, entry)
+        except Exception as e:
+            logger.exception("Failed to load plugin from %s: %s", toml_path, e)
 # NOTE: Registration endpoints are intentionally not exposed per request.
 # The server exposes plugin listing and event ingestion endpoints and a small in-process helper
 # so task_executor can either call GET /plugins remotely or import main_helper.user_plugin_server.get_plugins
@@ -113,6 +194,14 @@ async def plugin_test_plugin(payload: Dict[str, Any], request: Request):
         logger.exception("testUserPlugin: plugin handler error")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.on_event("startup")
+async def _startup_load_plugins():
+    """
+    服务启动时，从 TOML 配置加载插件。
+    """
+    _load_plugins_from_toml()
+    logger.info("Plugin registry after startup: %s", list(_plugins.keys()))
+
 # New endpoint: /plugin/trigger
 # This endpoint is intended to be called by TaskExecutor (or other components) when a plugin should be triggered.
 # Expected JSON body:
@@ -129,9 +218,9 @@ async def plugin_test_plugin(payload: Dict[str, Any], request: Request):
 async def plugin_trigger(payload: Dict[str, Any], request: Request):
     """
     Endpoint for receiving plugin trigger requests from TaskExecutor.
-    Accepts JSON with keys: plugin_id (str) and args (object, optional).
-    Special-case: if plugin_id == "testPlugin", immediately forward the call to /plugin/testPlugin
-    and include that plugin's response (if any) in the returned JSON (best-effort).
+    Now also supports in-process plugins loaded from TOML:
+      - look up plugin instance by plugin_id
+      - if instance has .run(**args), call it and include result in response
     """
     try:
         client_host = request.client.host if request.client else None
@@ -144,6 +233,7 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
             task_id = payload.get("task_id") or payload.get("id") or None
         if not plugin_id or not isinstance(plugin_id, str):
             raise HTTPException(status_code=400, detail="plugin_id (string) required")
+
         # Build event
         event = {
             "type": "plugin_triggered",
@@ -153,6 +243,7 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
             "client": client_host,
             "received_at": _now_iso()
         }
+
         # Enqueue with bounded queue behavior (drop oldest if full)
         try:
             _event_queue.put_nowait(event)
@@ -168,10 +259,27 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
                 return JSONResponse({"success": False, "error": "event queue full"}, status_code=503)
         logger.info("plugin_trigger: enqueued event for plugin_id=%s from client=%s", plugin_id, client_host)
 
-        # If this is the testPlugin, do a best-effort immediate internal forward to /plugin/testPlugin
-        plugin_response = None
-        plugin_error = None
-        if plugin_id == "testPlugin":
+        plugin_response: Any = None
+        plugin_error: Optional[Dict[str, Any]] = None
+
+        # 1) 优先尝试调用通过 TOML 加载的 in-process 插件实例
+        instance = _plugin_instances.get(plugin_id)
+        if instance is not None:
+            try:
+                handler = getattr(instance, "run", None)
+                if callable(handler):
+                    if inspect.iscoroutinefunction(handler):
+                        plugin_response = await handler(**(args or {}))
+                    else:
+                        plugin_response = handler(**(args or {}))
+                else:
+                    logger.warning("plugin_trigger: plugin %s has no callable .run, skipping in-process call", plugin_id)
+            except Exception as e:
+                logger.exception("plugin_trigger: error calling in-process plugin %s", plugin_id)
+                plugin_error = {"error": str(e)}
+
+        # 2) 保留原有 testPlugin HTTP 转发（作为兼容或兜底）
+        if plugin_id == "testPlugin" and plugin_response is None:
             try:
                 import httpx
                 forward_payload = {}
@@ -186,21 +294,31 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     r = await client.post(internal_url, json=forward_payload)
                     try:
-                        plugin_response = r.json()
+                        http_resp = r.json()
                     except Exception:
-                        plugin_response = {"raw_text": r.text}
+                        http_resp = {"raw_text": r.text}
+                    # 如果前面已经有 in-process 响应，就不要覆盖；这里只在 plugin_response 还为空时赋值
+                    if plugin_response is None:
+                        plugin_response = http_resp
                     if not (200 <= r.status_code < 300):
                         plugin_error = {"status_code": r.status_code, "text": r.text}
             except Exception as e:
-                plugin_error = {"error": str(e)}
                 logger.warning("plugin_trigger: internal forward to testPlugin failed: %s", e)
+                if plugin_error is None:
+                    plugin_error = {"error": str(e)}
 
-        resp = {"success": True, "plugin_id": plugin_id, "args": args, "received_at": event["received_at"]}
+        resp: Dict[str, Any] = {
+            "success": True,
+            "plugin_id": plugin_id,
+            "args": args,
+            "received_at": event["received_at"],
+        }
         if plugin_response is not None:
             resp["plugin_response"] = plugin_response
         if plugin_error is not None:
             resp["plugin_forward_error"] = plugin_error
         return JSONResponse(resp)
+
     except HTTPException:
         raise
     except Exception as e:
