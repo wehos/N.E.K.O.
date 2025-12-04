@@ -550,7 +550,25 @@ function renderMaster() {
                 }
                 const row = document.createElement('div');
                 row.className = 'field-row custom-row';
-                row.innerHTML = `<label>${key}</label><textarea name="${key}" rows="1" placeholder="可输入详细描述"></textarea><button type="button" class="btn sm delete" style="margin-left:8px">${window.t ? window.t('character.deleteField') : '删除设定'}</button>`;
+
+                const labelEl = document.createElement('label');
+                labelEl.textContent = key;
+                row.appendChild(labelEl);
+
+                const textareaEl = document.createElement('textarea');
+                textareaEl.name = key;
+                textareaEl.rows = 1;
+                textareaEl.placeholder = '可输入详细描述';
+                row.appendChild(textareaEl);
+
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'btn sm delete';
+                delBtn.style.marginLeft = '8px';
+                delBtn.textContent = window.t ? window.t('character.deleteField') : '删除设定';
+                delBtn.addEventListener('click', function() { deleteMasterField(this); });
+                row.appendChild(delBtn);
+
                 masterFormEl.insertBefore(row, masterFormEl.querySelector('div[style]'));
                 
                 // 显示操作按钮
@@ -962,6 +980,7 @@ function showCatgirlForm(key, container) {
     sysTextarea.placeholder = window.t ? window.t('character.systemPrompt') : '系统指令（谨慎修改）';
     sysTextarea.value = cat['system_prompt'] || '';
     sysContent.appendChild(sysTextarea);
+    attachTextareaAutoResize(sysTextarea);
     innerFold.appendChild(sysContent);
     foldContent.appendChild(innerFold);
 
