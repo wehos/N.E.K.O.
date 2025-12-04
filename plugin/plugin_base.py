@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from .event_base import EventHandler, EventMeta, EVENT_META_ATTR
-from user_plugin_server import update_plugin_status
+from .user_plugin_server import update_plugin_status
 NEKO_PLUGIN_META_ATTR = "__neko_plugin_meta__"
 NEKO_PLUGIN_TAG = "__neko_plugin__"
 
@@ -32,6 +32,8 @@ class NekoPluginBase:
         entries: Dict[str, EventHandler] = {}
         for attr_name in dir(self):
             value = getattr(self, attr_name)
+            if not callable(value):
+                continue
             meta: EventMeta | None = getattr(value, EVENT_META_ATTR, None)
             if meta:
                 entries[meta.id] = EventHandler(meta=meta, handler=value)

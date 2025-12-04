@@ -379,15 +379,6 @@ OUTPUT FORMAT (strict JSON):
             plugins_desc = plugins_desc[:2000] + "\n... (truncated)"
         logger.debug(f"[UserPlugin] passing plugin descriptions (truncated): {plugins_desc[:1000]}")
         
-        # Provide a concrete JSON example to guide model outputs and reduce parsing errors
-        example_json = json.dumps({
-            "has_task": True,
-            "can_execute": True,
-            "task_description": "example: call testPlugin with a message",
-            "plugin_id": "testPlugin",
-            "plugin_args": {"message": "hello"}
-        }, ensure_ascii=False)
-        
         # Strongly enforce JSON-only output to reduce parsing errors
         # NOTE: Require the model to return entry_id when has_task and can_execute are true.
         system_prompt = f"""You are a User Plugin selection agent. AVAILABLE PLUGINS:
@@ -756,7 +747,10 @@ Return only the JSON object, nothing else.
         task_description = getattr(up_decision, "task_description", "")
         # Optional: allow up_decision to specify a specific entry id
         # Prefer explicit 'entry_id' returned by the LLM (up_decision.entry_id), then fallback to older names
-        plugin_entry_id = getattr(up_decision, "entry_id", None) # or getattr(up_decision, "plugin_entry_id", None) or plugin_args.pop("_entry", None)
+        plugin_entry_id = (
+            getattr(up_decision, "entry_id", None)
+            or getattr(up_decision, "plugin_entry_id", None)
+            or (plugin_args.pop("_entry", None) if isinstance(plugin_args, dict) else None))# or getattr(up_decision, "plugin_entry_id", None) or plugin_args.pop("_entry", None)
         
         if not plugin_id:
             return TaskResult(

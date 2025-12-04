@@ -2789,7 +2789,7 @@ function init_app(){
                             if (typeof agentMcpCheckbox._updateStyle === 'function') agentMcpCheckbox._updateStyle();
                         }
                         if (agentUserPluginCheckbox && !agentUserPluginCheckbox._processing && agentUserPluginCheckbox.checked !== (flags.user_plugin_enabled || false)) {
-                            console.log('[App] 同步MCP工具开关状态:', flags.user_plugin_enabled);
+                            console.log('[App] 同步用户插件开关状态:', flags.user_plugin_enabled);
                             agentUserPluginCheckbox.checked = flags.user_plugin_enabled || false;
                             agentUserPluginCheckbox._autoDisabled = true;
                             agentUserPluginCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
@@ -3092,7 +3092,7 @@ function init_app(){
                         })(),
                         (async () => {
                             if (!agentUserPluginCheckbox) return;
-                            const available = await checkCapability('mcp', false);
+                            const available = await checkCapability('user_plugin', false);
                             // 【防竞态】检查操作序列号和总开关状态
                             if (isExpired() || !agentMasterCheckbox.checked) {
                                 agentUserPluginCheckbox.disabled = true;
