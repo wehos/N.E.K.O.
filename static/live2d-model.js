@@ -241,6 +241,7 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                                     'ParamBreath', 'ParamEyeLOpen', 'ParamEyeROpen', 'ParamEyeBallX', 'ParamEyeBallY',
                                     'ParamArm', 'ParamHand', 'ParamShoulder', 'ParamElbow', 'ParamWrist'];
             const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
+            const visibilityParams = ['ParamOpacity', 'ParamVisibility']; // 跳过可见性参数，防止模型被设置为不可见
             
             // 获取常驻表情的所有参数ID集合（用于保护去水印等常驻表情参数）
             const persistentParamIds = this.getPersistentExpressionParamIds();
@@ -262,6 +263,8 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                     if (animationParams.includes(paramId)) continue;
                     // 跳过 param_${i} 格式的参数（这些可能是动画参数，不确定）
                     if (paramId.startsWith('param_')) continue;
+                    // 跳过可见性参数，防止模型被设置为不可见
+                    if (visibilityParams.includes(paramId)) continue;
                     // 跳过常驻表情已设置的参数（保护去水印等功能，同时允许用户设置其他参数）
                     if (persistentParamIds.has(paramId)) {
                         skippedPersistentCount++;
@@ -502,8 +505,12 @@ Live2DManager.prototype.installMouthOverride = function() {
         };
     }
     
-    // 覆盖 2: coreModel.update - 在调用原始 update 之前写入参数
-    // 在调用原始 update 之前写入参数（因为 update 会将参数应用到模型）
+    // 覆盖 coreModel.update - 在调用原始 update 之前写入参数
+    // 先保存原始的 update 方法
+    const origCoreModelUpdate = coreModel.update ? coreModel.update.bind(coreModel) : null;
+    this._origCoreModelUpdate = origCoreModelUpdate;
+    
+    // 覆盖 coreModel.update，确保在调用原始方法前写入参数
     coreModel.update = () => {
         try {
             // 1. 强制写入口型参数
@@ -528,32 +535,15 @@ Live2DManager.prototype.installMouthOverride = function() {
                     }
                 }
             }
-        } catch (e) {}
-    };
-    
-    // 覆盖 1: motionManager.update - 在动作更新后立即覆盖参数
-    if (motionManager && typeof motionManager.update === 'function') {
-        const origMotionManagerUpdate = motionManager.update.bind(motionManager);
-        this._origMotionManagerUpdate = origMotionManagerUpdate;
+        } catch (e) {
+            console.error('口型覆盖参数写入失败:', e);
+        }
         
-        motionManager.update = (model, now) => {
-            const result = origMotionManagerUpdate(model, now);
-            // 动作更新后立即覆盖参数
-            overwriteParams();
-            return result;
-        };
-    }
-    
-    // 覆盖 2: coreModel.update - 在渲染前再次确保参数正确
-    const origCoreModelUpdate = coreModel.update ? coreModel.update.bind(coreModel) : null;
-    this._origCoreModelUpdate = origCoreModelUpdate;
-    
-    coreModel.update = () => {
-        // 渲染前再次覆盖参数
-        overwriteParams();
-        // 调用原始的 update 方法
+        // 调用原始的 update 方法（重要：必须调用，否则模型无法渲染）
         if (origCoreModelUpdate) {
             origCoreModelUpdate();
+        } else {
+            console.error('警告：原始 coreModel.update 方法不存在，模型可能无法正常渲染');
         }
     };
 
@@ -586,7 +576,6 @@ Live2DManager.prototype.applyModelSettings = function(model, options) {
     const { preferences, isMobile = false } = options;
 
     if (isMobile) {
-        // 移动端设置
         const scale = Math.min(
             0.5,
             window.innerHeight * 1.3 / 4000,
@@ -597,26 +586,46 @@ Live2DManager.prototype.applyModelSettings = function(model, options) {
         model.y = this.pixi_app.renderer.height * 0.28;
         model.anchor.set(0.5, 0.1);
     } else {
-        // 桌面端设置
         if (preferences && preferences.scale && preferences.position) {
-            // 使用保存的偏好设置
-            model.scale.set(preferences.scale.x, preferences.scale.y);
-            model.x = preferences.position.x;
-            model.y = preferences.position.y;
+            const scaleX = Number(preferences.scale.x);
+            const scaleY = Number(preferences.scale.y);
+            const posX = Number(preferences.position.x);
+            const posY = Number(preferences.position.y);
+            
+            // 验证缩放值是否有效
+            if (Number.isFinite(scaleX) && Number.isFinite(scaleY) && 
+                scaleX > 0 && scaleY > 0 && scaleX < 10 && scaleY < 10) {
+                model.scale.set(scaleX, scaleY);
+            } else {
+                console.warn('保存的缩放设置无效，使用默认值');
+                const defaultScale = Math.min(
+                    0.5,
+                    (window.innerHeight * 0.75) / 7000,
+                    (window.innerWidth * 0.6) / 7000
+                );
+                model.scale.set(defaultScale);
+            }
+            
+            // 验证位置值是否有效
+            if (Number.isFinite(posX) && Number.isFinite(posY) &&
+                Math.abs(posX) < 100000 && Math.abs(posY) < 100000) {
+                model.x = posX;
+                model.y = posY;
+            } else {
+                console.warn('保存的位置设置无效，使用默认值');
+                model.x = this.pixi_app.renderer.width;
+                model.y = this.pixi_app.renderer.height;
+            }
         } else {
-            // 使用默认设置（改为靠屏幕右侧）
             const scale = Math.min(
                 0.5,
                 (window.innerHeight * 0.75) / 7000,
                 (window.innerWidth * 0.6) / 7000
             );
             model.scale.set(scale);
-            // 将默认 x 调整到屏幕靠右位置，使用 0.85 作为右侧偏移比例
-            // 向右下角进一步偏移，靠近屏幕右下
             model.x = this.pixi_app.renderer.width;
             model.y = this.pixi_app.renderer.height;
         }
-        // 增大 anchor.x 以便模型更靠近右侧边缘
         model.anchor.set(0.65, 0.75);
     }
 };
@@ -628,11 +637,9 @@ Live2DManager.prototype.applyModelParameters = function(model, parameters) {
     }
     
     const coreModel = model.internalModel.coreModel;
-    let appliedCount = 0;
-    
-    // 获取常驻表情的所有参数ID集合（用于保护去水印等常驻表情参数）
     const persistentParamIds = this.getPersistentExpressionParamIds();
-    
+    const visibilityParams = ['ParamOpacity', 'ParamVisibility']; // 跳过可见性参数，防止模型被设置为不可见
+
     for (const paramId in parameters) {
         if (parameters.hasOwnProperty(paramId)) {
             try {
@@ -646,8 +653,12 @@ Live2DManager.prototype.applyModelParameters = function(model, parameters) {
                     continue;
                 }
                 
+                // 跳过可见性参数，防止模型被设置为不可见
+                if (visibilityParams.includes(paramId)) {
+                    continue;
+                }
+                
                 let idx = -1;
-                // 如果参数ID是 param_${i} 格式，直接解析索引
                 if (paramId.startsWith('param_')) {
                     const indexStr = paramId.replace('param_', '');
                     const parsedIndex = parseInt(indexStr, 10);
@@ -655,20 +666,18 @@ Live2DManager.prototype.applyModelParameters = function(model, parameters) {
                         idx = parsedIndex;
                     }
                 } else {
-                    // 否则尝试通过参数ID获取索引
                     try {
                         idx = coreModel.getParameterIndex(paramId);
                     } catch (e) {
-                        // getParameterIndex 失败，忽略
+                        // Ignore
                     }
                 }
                 
                 if (idx >= 0) {
                     coreModel.setParameterValueByIndex(idx, value);
-                    appliedCount++;
                 }
             } catch (e) {
-                // 忽略不存在的参数
+                // Ignore
             }
         }
     }
