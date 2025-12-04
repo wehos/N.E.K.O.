@@ -235,8 +235,8 @@
     </div>
 
     <div class="control-group">
-        <a href="/live2d_parameter_editor" class="btn btn-secondary" style="width:100%; text-decoration: none; display: block; text-align: center;">
-            <span>🎨 参数编辑器（捏脸系统）</span>
+        <a href="/live2d_parameter_editor" class="btn btn-secondary" style="width:100%; text-decoration: none; display: block; text-align: center;" data-i18n="live2d.parameterEditor.title">
+            <span>🎨 参数编辑器</span>
         </a>
     </div>
 
@@ -961,6 +961,10 @@
             const selectedFile = persistentSelect.value;
             if (!selectedFile || !currentModelInfo) return;
             
+            // 防止重复操作
+            if (persistentSelect.disabled) return;
+            persistentSelect.disabled = true;
+            
             try {
                 // 获取当前配置
                 const res = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`);
@@ -982,7 +986,7 @@
                 if (currentConfig.expressions['常驻'].includes(selectedFile)) {
                     showStatus(t('live2d.persistentExpressionExists', '该表情已添加为常驻表情'), 2000);
                     persistentSelect.value = '';
-                    return;
+                    return; // 注意：这里return后会在finally中恢复disabled状态
                 }
                 
                 // 添加到常驻表情列表
@@ -1002,10 +1006,14 @@
                     persistentSelect.value = '';
                 } else {
                     showStatus(t('live2d.persistentExpressionAddFailed', '添加常驻表情失败'), 2000);
+                    persistentSelect.value = '';
                 }
             } catch (e) {
                 console.error('添加常驻表情失败:', e);
                 showStatus(t('live2d.persistentExpressionAddFailed', '添加常驻表情失败'), 2000);
+                persistentSelect.value = '';
+            } finally {
+                persistentSelect.disabled = false;
             }
         });
 
