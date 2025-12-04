@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 import asyncio
@@ -9,7 +10,7 @@ from config import USER_PLUGIN_SERVER_PORT
 from pathlib import Path
 import importlib
 import inspect
-from plugin.event_base import EventHandler 
+from plugin.event_base import EventHandler,EVENT_META_ATTR
 # Python 3.11 有 tomllib；低版本可用 tomli 兼容
 try:
     import tomllib  # type: ignore[attr-defined]
@@ -20,6 +21,12 @@ app = FastAPI(title="N.E.K.O User Plugin Server")
 
 logger = logging.getLogger("user_plugin_server")
 logging.basicConfig(level=logging.DEBUG)
+@dataclass
+class PluginContext:
+    app: FastAPI
+    plugin_id: str
+    logger: logging.Logger
+    config_path: Path
 
 # In-memory plugin registry (initially empty). Plugins are dicts with keys:
 # { "id": str, "name": str, "description": str, "endpoint": str, "input_schema": dict }
@@ -214,9 +221,16 @@ def _load_plugins_from_toml() -> None:
             module_path, class_name = entry.split(":", 1)
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
-
+            # 构造一个简单的上下文 ctx 传给插件
+            plugin_logger = logger.getChild(pid)
+            ctx = PluginContext(
+                app=app,          # FastAPI 实例，插件需要时可以用
+                plugin_id= pid,    # 当前插件 id
+                logger=plugin_logger,
+                config_path=toml_path,  # 这个也可以传进去，随意
+            )
             # 实例化插件；如果将来想传 ctx，可以改成 cls(ctx)
-            instance = cls(None)
+            instance = cls(ctx)
             instance._plugin_id = pid  # 注入 plugin_id 供实例内部使用
             _plugin_instances[pid] = instance
             plugin_meta = {
@@ -238,7 +252,6 @@ def _load_plugins_from_toml() -> None:
             # 自动扫描实例的方法，查找 EventMeta 并将对应的 EventHandler 注册到 _event_handlers
             # 使用 event_base.py 中约定的 EVENT_META_ATTR（如果插件方法被装饰器标注了元信息）
             try:
-                from event_base import EVENT_META_ATTR, EventHandler as _EB_EventHandler
                 for name, member in inspect.getmembers(instance, predicate=callable):
                     # 忽略私有方法
                     if name.startswith("_"):
@@ -267,8 +280,8 @@ def _load_plugins_from_toml() -> None:
                     key1 = f"{pid}.{eid}"
                     key2 = f"{pid}:plugin_entry:{eid}"
                     # 构造 EventHandler 并注册（最后注册的覆盖同名）
-                    _event_handlers[key1] = _EB_EventHandler(meta=event_meta, handler=member)
-                    _event_handlers[key2] = _EB_EventHandler(meta=event_meta, handler=member)
+                    _event_handlers[key1] = EventHandler(meta=event_meta, handler=member)
+                    _event_handlers[key2] = EventHandler(meta=event_meta, handler=member)
                     # 记录 (plugin_id, entry_id) -> python method 名，供触发时服务器端回退使用
                     try:
                         _plugin_entry_method_map[(pid, str(eid))] = name
@@ -287,8 +300,8 @@ def _load_plugins_from_toml() -> None:
                             # prefer instance method matching eid
                             if hasattr(instance, eid):
                                 handler_fn = getattr(instance, eid)
-                                _event_handlers[f"{pid}.{eid}"] = _EB_EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
-                                _event_handlers[f"{pid}:plugin_entry:{eid}"] = _EB_EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
+                                _event_handlers[f"{pid}.{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
+                                _event_handlers[f"{pid}:plugin_entry:{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
                         except Exception as e:
                             logger.debug("Failed to check event_type for %s.%s: %s", pid, name, e)
                             continue

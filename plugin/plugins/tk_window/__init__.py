@@ -5,7 +5,7 @@ from plugin.plugin_base import NekoPluginBase
 
 """
 Plugin for test use.
-Considered to be discarded in the future.
+Deprecated,considered to be discarded in the future.
 May contains unpredictable bugs and bug fix is not provided.
 """
 @neko_plugin
