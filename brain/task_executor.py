@@ -95,7 +95,7 @@ class DirectTaskExecutor:
                         self.plugin_list = plugin_list  # 更新实例变量
             except Exception as e:
                 logger.warning(f"[Agent] plugin_list_provider http fetch failed: {e}")
-        logger.info(self.plugin_list)
+        logger.info(f"[Agent] Loaded {len(self.plugin_list)} plugins: {[p.get('id', 'unknown') for p in self.plugin_list if isinstance(p, dict)]}")
         return self.plugin_list
 
 
@@ -335,6 +335,7 @@ OUTPUT FORMAT (strict JSON):
             if not plugins:
                 return type("UP", (), {"has_task": False, "can_execute": False, "task_description":"", "plugin_id": None, "plugin_args": None, "reason":"No plugins"})
         except Exception:
+            logger.debug("[UserPlugin] Failed to check plugins validity", exc_info=True)
             return type("UP", (), {"has_task": False, "can_execute": False, "task_description":"", "plugin_id": None, "plugin_args": None, "reason":"Invalid plugins"})
     
         # 构建插件描述供 LLM 参考（包含 id, description, input_schema 以及 entries 列表）
@@ -449,8 +450,8 @@ Return only the JSON object, nothing else.
                     prompt_dump = (system_prompt + "\n\n" + user_prompt)[:2000]
                 except Exception:
                     prompt_dump = "(failed to build prompt dump)"
-                logger.info(f"[UserPlugin Assessment] prompt (truncated): {prompt_dump}")
-                logger.info(f"[UserPlugin Assessment] raw LLM response: {repr(raw_text)[:2000]}")
+                logger.debug(f"[UserPlugin Assessment] prompt (truncated): {prompt_dump}")
+                logger.debug(f"[UserPlugin Assessment] raw LLM response: {repr(raw_text)[:2000]}")
                 
                 text = raw_text.strip() if isinstance(raw_text, str) else ""
                 
@@ -556,7 +557,6 @@ Return only the JSON object, nothing else.
             assessment_tasks.append(('mcp', self._assess_mcp(conversation, capabilities)))
         
         # user plugin 支路（由外部 provider 提供插件列表）
-        user_plugin_enabled = agent_flags.get("user_plugin_enabled", self.user_plugin_enabled_default)
         await self.plugin_list_provider()
         plugins = self.plugin_list
         
@@ -784,6 +784,7 @@ Return only the JSON object, nothing else.
                     plugin_meta = p
                     break
             except Exception:
+                logger.debug(f"[UserPlugin] Skipped malformed plugin entry during lookup: {p}", exc_info=True)
                 continue
         
         if plugin_meta is None:
@@ -815,6 +816,7 @@ Return only the JSON object, nothing else.
                     try:
                         data = r.json()
                     except Exception:
+                        logger.debug("[TaskExecutor] Failed to parse trigger response as JSON, using text fallback", exc_info=True)
                         data = {"raw_text": r.text}
                     # Enhanced logging: include trigger_body and returned data for diagnosis
                     try:
@@ -835,7 +837,7 @@ Return only the JSON object, nothing else.
                         has_task=True,
                         task_description=task_description,
                         execution_method='user_plugin',
-                        success=False,
+                        success=False, # False indicates trigger accepted but not yet completed
                         result=result_obj,
                         tool_name=plugin_name,
                         tool_args=plugin_args,

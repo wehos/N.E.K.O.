@@ -2754,7 +2754,7 @@ function init_app(){
                             agentMasterCheckbox._autoDisabled = false;
                             if (typeof agentMasterCheckbox._updateStyle === 'function') agentMasterCheckbox._updateStyle();
                             // 复位子开关
-                            [agentKeyboardCheckbox, agentMcpCheckbox,agentUserPluginCheckbox].forEach(cb => {
+                            [agentKeyboardCheckbox, agentMcpCheckbox, agentUserPluginCheckbox].forEach(cb => {
                                 if (cb) {
                                     cb.checked = false;
                                     cb.disabled = true;
@@ -3189,7 +3189,7 @@ function init_app(){
                             headers: {'Content-Type': 'application/json'}, 
                             body: JSON.stringify({
                                 lanlan_name: lanlan_config.lanlan_name, 
-                                flags: {agent_enabled: false, computer_use_enabled: false, mcp_enabled: false}
+                                flags: {agent_enabled: false, computer_use_enabled: false, mcp_enabled: false,user_plugin_enabled:false}
                             })
                         });
                     } catch(e) {
