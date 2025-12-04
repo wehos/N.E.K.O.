@@ -211,6 +211,18 @@
     </div>
 
     <div class="control-group">
+        <label class="control-label" data-i18n="live2d.persistentExpression">常驻表情（仅expression）:</label>
+        <p style="font-size: 11px; color: #666; margin: 4px 0 8px 0;" data-i18n="live2d.persistentHint">
+            常驻表情会一直生效，不会被清除或覆盖；此处仅能选择 .exp3.json。
+        </p>
+        <select id="persistent-expression-select" class="control-select" disabled>
+            <option value="" data-i18n="live2d.selectPersistentExpression">选择常驻表情</option>
+        </select>
+        <div id="persistent-list" style="display: none;"></div>
+        <button id="save-persistent-btn" class="btn btn-success" disabled style="margin-top: 8px;" data-i18n="live2d.savePersistent">保存常驻表情</button>
+    </div>
+
+    <div class="control-group">
         <div style="display:flex; gap: 10px;">
             <button id="emotion-manager-btn" class="btn btn-primary btn-icon" disabled style="flex:1;">
                 <img src="/static/icons/emotion_config_icon.png" alt="情感配置" data-i18n-alt="live2d.emotionConfig">
@@ -664,8 +676,14 @@
                 updateSelectWithOptions(motionSelect, currentModelFiles.motion_files, t('live2d.selectMotion', '选择动作'), 'motion');
                 updateSelectWithOptions(expressionSelect, currentModelFiles.expression_files, t('live2d.selectExpression', '选择表情'), 'expression');
 
+                // 更新常驻表情选择框（只显示 .exp3.json 文件）
+                await updatePersistentExpressionSelect();
+
                 // 7. Load current emotion mapping for this model
                 await loadEmotionMappingForModel(modelName);
+                
+                // 加载并显示已配置的常驻表情
+                await loadPersistentExpressions();
                 
                 // 如果没有动作文件，禁用动作相关控件
                 if (currentModelFiles.motion_files.length === 0) {
@@ -871,6 +889,187 @@
             }
         });
 
+        // 更新常驻表情选择框
+        async function updatePersistentExpressionSelect() {
+            const persistentSelect = document.getElementById('persistent-expression-select');
+            const savePersistentBtn = document.getElementById('save-persistent-btn');
+            
+            if (!currentModelFiles || !currentModelFiles.expression_files) {
+                persistentSelect.disabled = true;
+                savePersistentBtn.disabled = true;
+                return;
+            }
+            
+            // 只显示 .exp3.json 文件
+            const exp3Files = currentModelFiles.expression_files.filter(file => file.endsWith('.exp3.json'));
+            
+            persistentSelect.innerHTML = `<option value="" data-i18n="live2d.selectPersistentExpression">选择常驻表情</option>`;
+            exp3Files.forEach(file => {
+                const option = document.createElement('option');
+                option.value = file;
+                const displayName = file.split('/').pop().replace('.exp3.json', '');
+                option.textContent = displayName;
+                persistentSelect.appendChild(option);
+            });
+            
+            persistentSelect.disabled = false;
+            savePersistentBtn.disabled = false;
+        }
+
+        // 加载已配置的常驻表情
+        async function loadPersistentExpressions() {
+            const persistentList = document.getElementById('persistent-list');
+            if (!currentModelInfo) {
+                persistentList.style.display = 'none';
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`);
+                const data = await res.json();
+                
+                if (data && data.success && data.config && data.config.expressions && data.config.expressions['常驻']) {
+                    const persistentExpressions = data.config.expressions['常驻'];
+                    if (persistentExpressions && persistentExpressions.length > 0) {
+                        persistentList.innerHTML = '';
+                        persistentExpressions.forEach(file => {
+                            const item = document.createElement('div');
+                            item.style.cssText = 'padding: 4px 8px; margin: 2px 0; background: #f0f0f0; border-radius: 4px; font-size: 12px; display: flex; justify-content: space-between; align-items: center;';
+                            const fileName = file.split('/').pop().replace('.exp3.json', '');
+                            item.innerHTML = `
+                                <span>${fileName}</span>
+                                <button onclick="removePersistentExpression('${file}')" style="background: #dc3545; color: white; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px;">删除</button>
+                            `;
+                            persistentList.appendChild(item);
+                        });
+                        persistentList.style.display = 'block';
+                    } else {
+                        persistentList.style.display = 'none';
+                    }
+                } else {
+                    persistentList.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('加载常驻表情失败:', e);
+                persistentList.style.display = 'none';
+            }
+        }
+
+        // 添加常驻表情
+        const persistentSelect = document.getElementById('persistent-expression-select');
+        persistentSelect.addEventListener('change', async () => {
+            const selectedFile = persistentSelect.value;
+            if (!selectedFile || !currentModelInfo) return;
+            
+            try {
+                // 获取当前配置
+                const res = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`);
+                const data = await res.json();
+                
+                const currentConfig = data && data.success ? (data.config || { motions: {}, expressions: {} }) : { motions: {}, expressions: {} };
+                
+                // 确保expressions对象存在
+                if (!currentConfig.expressions) {
+                    currentConfig.expressions = {};
+                }
+                
+                // 确保常驻表情数组存在
+                if (!currentConfig.expressions['常驻']) {
+                    currentConfig.expressions['常驻'] = [];
+                }
+                
+                // 检查是否已存在
+                if (currentConfig.expressions['常驻'].includes(selectedFile)) {
+                    showStatus(t('live2d.persistentExpressionExists', '该表情已添加为常驻表情'), 2000);
+                    persistentSelect.value = '';
+                    return;
+                }
+                
+                // 添加到常驻表情列表
+                currentConfig.expressions['常驻'].push(selectedFile);
+                
+                // 保存配置
+                const saveRes = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentConfig)
+                });
+                
+                const saveData = await saveRes.json();
+                if (saveData.success) {
+                    showStatus(t('live2d.persistentExpressionAdded', '常驻表情已添加'), 2000);
+                    await loadPersistentExpressions();
+                    persistentSelect.value = '';
+                } else {
+                    showStatus(t('live2d.persistentExpressionAddFailed', '添加常驻表情失败'), 2000);
+                }
+            } catch (e) {
+                console.error('添加常驻表情失败:', e);
+                showStatus(t('live2d.persistentExpressionAddFailed', '添加常驻表情失败'), 2000);
+            }
+        });
+
+        // 删除常驻表情
+        window.removePersistentExpression = async function(file) {
+            if (!currentModelInfo) return;
+            
+            try {
+                const res = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`);
+                const data = await res.json();
+                
+                const currentConfig = data && data.success ? (data.config || { motions: {}, expressions: {} }) : { motions: {}, expressions: {} };
+                
+                if (currentConfig.expressions && currentConfig.expressions['常驻']) {
+                    const index = currentConfig.expressions['常驻'].indexOf(file);
+                    if (index > -1) {
+                        currentConfig.expressions['常驻'].splice(index, 1);
+                        
+                        const saveRes = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(currentConfig)
+                        });
+                        
+                        const saveData = await saveRes.json();
+                        if (saveData.success) {
+                            showStatus(t('live2d.persistentExpressionRemoved', '常驻表情已删除'), 2000);
+                            await loadPersistentExpressions();
+                        } else {
+                            showStatus(t('live2d.persistentExpressionRemoveFailed', '删除常驻表情失败'), 2000);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('删除常驻表情失败:', e);
+                showStatus(t('live2d.persistentExpressionRemoveFailed', '删除常驻表情失败'), 2000);
+            }
+        };
+
+        // 保存常驻表情按钮
+        const savePersistentBtn = document.getElementById('save-persistent-btn');
+        savePersistentBtn.addEventListener('click', async () => {
+            if (!currentModelInfo) {
+                showStatus(t('live2d.pleaseLoadModel', '请先加载模型'), 2000);
+                return;
+            }
+            
+            showStatus(t('live2d.savingPersistentExpression', '正在保存常驻表情...'), 0);
+            
+            try {
+                const res = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(currentModelInfo.name)}`);
+                const data = await res.json();
+                
+                if (data && data.success) {
+                    showStatus(t('live2d.persistentExpressionSaved', '常驻表情保存成功'), 2000);
+                } else {
+                    showStatus(t('live2d.persistentExpressionSaveFailed', '保存常驻表情失败'), 2000);
+                }
+            } catch (e) {
+                console.error('保存常驻表情失败:', e);
+                showStatus(t('live2d.persistentExpressionSaveFailed', '保存常驻表情失败'), 2000);
+            }
+        });
+
         // Helper functions
         function setControlsDisabled(disabled) {
             motionSelect.disabled = disabled;
@@ -879,6 +1078,10 @@
             playExpressionBtn.disabled = disabled;
             emotionManagerBtn.disabled = disabled;
             savePositionBtn.disabled = disabled;
+            const persistentSelect = document.getElementById('persistent-expression-select');
+            const savePersistentBtn = document.getElementById('save-persistent-btn');
+            if (persistentSelect) persistentSelect.disabled = disabled;
+            if (savePersistentBtn) savePersistentBtn.disabled = disabled;
         }
 
         function updateSelectWithOptions(select, options, defaultText, type) {

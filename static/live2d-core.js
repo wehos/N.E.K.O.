@@ -43,6 +43,7 @@ class Live2DManager {
         
         // 常驻表情：使用官方 expression 播放并在清理后自动重放
         this.persistentExpressionNames = [];
+        this.persistentExpressionParamsByName = {};
 
         // UI/Ticker 资源句柄（便于在切换模型时清理）
         this._lockIconTicker = null;

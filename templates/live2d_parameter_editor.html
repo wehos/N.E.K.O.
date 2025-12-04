@@ -4,7 +4,7 @@
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live2D 参数编辑器（捏脸系统）</title>
+    <title data-i18n="live2d.parameterEditor.title">Live2D 参数编辑器（捏脸系统）</title>
     <script src="/static/i18n-i18next.js"></script>
     <script src="/static/common_dialogs.js"></script>
     <style>
@@ -260,33 +260,33 @@
 
 <div id="sidebar">
     <div class="control-group">
-        <button id="backToMainBtn" class="btn btn-primary">← 返回主页</button>
+        <button id="backToMainBtn" class="btn btn-primary" data-i18n="live2d.parameterEditor.backToMain">← 返回主页</button>
     </div>
     
     <div class="control-group">
-        <label for="model-select" class="control-label">选择模型:</label>
+        <label for="model-select" class="control-label" data-i18n="live2d.parameterEditor.selectModel">选择模型:</label>
         <select id="model-select" class="control-select">
-            <option>加载中...</option>
+            <option data-i18n="live2d.parameterEditor.loading">加载中...</option>
         </select>
     </div>
 
     <div class="control-group">
         <div style="display:flex; gap: 10px;">
-            <button id="reset-all-btn" class="btn btn-secondary" disabled style="flex:1;">重置全部</button>
-            <button id="save-btn" class="btn btn-success" disabled style="flex:1;">保存参数</button>
+            <button id="reset-all-btn" class="btn btn-secondary" disabled style="flex:1;" data-i18n="live2d.parameterEditor.resetAll">重置全部</button>
+            <button id="save-btn" class="btn btn-success" disabled style="flex:1;" data-i18n="live2d.parameterEditor.saveParameters">保存参数</button>
         </div>
     </div>
 
     <div class="control-group" style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
-        <label class="control-label">参数列表:</label>
+        <label class="control-label" data-i18n="live2d.parameterEditor.parameterList">参数列表:</label>
         <div id="parameters-list" class="parameters-list">
-            <div style="text-align: center; color: #999; padding: 20px;">
+            <div style="text-align: center; color: #999; padding: 20px;" data-i18n="live2d.parameterEditor.pleaseSelectAndLoadModel">
                 请先选择并加载模型
             </div>
         </div>
     </div>
     
-    <div id="status">请先选择模型</div>
+    <div id="status" data-i18n="live2d.parameterEditor.pleaseSelectModel">请先选择模型</div>
 </div>
 
 <div id="live2d-container"><canvas id="live2d-canvas"></canvas></div>
@@ -303,6 +303,47 @@
 <script src="/static/live2d-init.js"></script>
 
 <script>
+    // 等待i18next初始化完成并更新页面文本
+    function updatePageTranslations() {
+        // 更新所有带有data-i18n属性的元素
+        if (window.updatePageTexts && typeof window.updatePageTexts === 'function') {
+            window.updatePageTexts();
+        } else if (window.t && typeof window.t === 'function') {
+            // 手动更新所有data-i18n元素
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) {
+                    try {
+                        const translated = window.t(key);
+                        // 如果翻译失败（返回key本身），尝试使用元素内的原始文本作为fallback
+                        if (translated === key && el.textContent && el.textContent.trim()) {
+                            // 保持原始文本
+                        } else {
+                            el.textContent = translated;
+                        }
+                    } catch (e) {
+                        console.warn('翻译失败:', key, e);
+                    }
+                }
+            });
+        }
+    }
+    
+    // 监听i18next初始化完成事件
+    document.addEventListener('DOMContentLoaded', function() {
+        // 立即尝试更新一次
+        updatePageTranslations();
+        
+        // 监听语言变化事件
+        window.addEventListener('localechange', function() {
+            updatePageTranslations();
+        });
+        
+        // 延迟更新（等待i18next完全初始化）
+        setTimeout(updatePageTranslations, 500);
+        setTimeout(updatePageTranslations, 1000);
+    });
+
     let live2dModel = null;
     let currentModelInfo = null;
     let parameterInfo = null;
@@ -571,11 +612,45 @@
         }
     }
 
+    // 翻译辅助函数（优先返回中文fallback，确保始终显示中文）
+    function t(key, fallback, params = {}) {
+        // 如果提供了fallback，优先使用fallback（确保显示中文）
+        if (fallback) {
+            try {
+                if (window.t && typeof window.t === 'function' && window.i18n && window.i18n.isInitialized) {
+                    const result = window.t(key, params);
+                    // 如果翻译成功且不是key本身，使用翻译结果
+                    if (result && result !== key) {
+                        return result;
+                    }
+                }
+            } catch (e) {
+                console.error(`[i18n] Translation failed for key "${key}":`, e);
+            }
+            // 始终返回中文fallback
+            return fallback;
+        }
+        
+        // 如果没有fallback，尝试翻译
+        try {
+            if (window.t && typeof window.t === 'function') {
+                const result = window.t(key, params);
+                if (result && result !== key) {
+                    return result;
+                }
+            }
+        } catch (e) {
+            console.error(`[i18n] Translation failed for key "${key}":`, e);
+        }
+        
+        return key;
+    }
+
     function showStatus(message, duration = 0) {
         statusDiv.textContent = message;
         if (duration > 0) {
             setTimeout(() => {
-                statusDiv.textContent = '就绪';
+                statusDiv.textContent = t('live2d.parameterEditor.ready', '就绪');
             }, duration);
         }
     }
@@ -607,22 +682,22 @@
             }
             
             if (models.length > 0) {
-                modelSelect.innerHTML = '<option value="">请选择模型</option>';
+                modelSelect.innerHTML = `<option value="">${t('live2d.parameterEditor.pleaseSelectModelOption', '请选择模型')}</option>`;
                 models.forEach(model => {
                     const option = document.createElement('option');
                     option.value = model.name;
                     option.textContent = model.name;
                     modelSelect.appendChild(option);
                 });
-                showStatus('模型列表加载成功', 2000);
+                showStatus(t('live2d.parameterEditor.modelListLoaded', '模型列表加载成功'), 2000);
             } else {
-                modelSelect.innerHTML = '<option value="">暂无模型</option>';
-                showStatus('未找到模型', 3000);
+                modelSelect.innerHTML = `<option value="">${t('live2d.parameterEditor.noModels', '暂无模型')}</option>`;
+                showStatus(t('live2d.parameterEditor.noModelsFound', '未找到模型'), 3000);
             }
         } catch (error) {
             console.error('加载模型列表失败:', error);
-            modelSelect.innerHTML = '<option value="">加载失败</option>';
-            showStatus('加载模型列表失败: ' + error.message, 3000);
+            modelSelect.innerHTML = `<option value="">${t('live2d.parameterEditor.loading', '加载中...')}</option>`;
+            showStatus(t('live2d.parameterEditor.modelListLoadFailed', '加载模型列表失败: {{error}}', {error: error.message}), 3000);
         }
     }
 
@@ -649,7 +724,7 @@
     async function loadModel(modelName) {
         if (!modelName) return;
         
-        showStatus('正在加载模型...');
+        showStatus(t('live2d.parameterEditor.loadingModel', '正在加载模型...'));
         
         try {
             // 确保 PIXI 应用已初始化
@@ -676,7 +751,7 @@
             
             const modelInfo = models.find(m => m.name === modelName);
             if (!modelInfo) {
-                throw new Error('模型不存在');
+                throw new Error(t('live2d.parameterEditor.modelNotFound', '模型不存在'));
             }
             
             currentModelInfo = modelInfo;
@@ -685,14 +760,14 @@
             const filesResponse = await fetch(`/api/live2d/model_files/${encodeURIComponent(modelName)}`);
             const filesData = await filesResponse.json();
             if (!filesData.success) {
-                throw new Error('无法获取模型文件');
+                throw new Error(t('live2d.parameterEditor.cannotGetModelFiles', '无法获取模型文件'));
             }
             
             // 构建模型配置
             let modelJsonUrl = modelInfo.path;
             const modelConfigRes = await fetch(modelJsonUrl);
             if (!modelConfigRes.ok) {
-                throw new Error('无法获取模型配置');
+                throw new Error(t('live2d.parameterEditor.cannotGetModelConfig', '无法获取模型配置'));
             }
             const modelConfig = await modelConfigRes.json();
             modelConfig.url = modelJsonUrl;
@@ -715,10 +790,10 @@
             resetAllBtn.disabled = false;
             saveBtn.disabled = false;
             
-            showStatus('模型加载成功', 2000);
+            showStatus(t('live2d.parameterEditor.modelLoadSuccess', '模型加载成功'), 2000);
         } catch (error) {
             console.error('加载模型失败:', error);
-            showStatus('加载模型失败: ' + error.message, 3000);
+            showStatus(t('live2d.parameterEditor.modelLoadFailed', '加载模型失败: {{error}}', {error: error.message}), 3000);
         }
     }
 
@@ -768,7 +843,24 @@
                 }
                 
                 const groupId = param.groupId || 'Other';
-                const groupName = parameterGroups[groupId] ? parameterGroups[groupId].name : groupId;
+                // 参数分组名称翻译映射
+                const groupNameMap = {
+                    'Face': '面部',
+                    'Eye': '眼睛',
+                    'Eyebrow': '眉毛',
+                    'Mouth': '嘴巴',
+                    'Arm': '手臂',
+                    'Body': '身体',
+                    'Hair': '头发',
+                    'Other': '其他'
+                };
+                let groupName = parameterGroups[groupId] ? parameterGroups[groupId].name : groupId;
+                // 如果分组名称是英文，尝试翻译
+                if (groupNameMap[groupName]) {
+                    groupName = groupNameMap[groupName];
+                } else if (groupNameMap[groupId]) {
+                    groupName = groupNameMap[groupId];
+                }
                 
                 if (!groupedParams[groupName]) {
                     groupedParams[groupName] = [];
@@ -807,7 +899,7 @@
                         continue;
                     }
                     
-                    const groupName = '其他';
+                    const groupName = '其他'; // 固定使用中文
                     if (!groupedParams[groupName]) {
                         groupedParams[groupName] = [];
                     }
@@ -826,7 +918,7 @@
         parametersList.innerHTML = '';
         
         if (Object.keys(groupedParams).length === 0) {
-            parametersList.innerHTML = '<div style="text-align: center; color: #999; padding: 20px;">未找到匹配的参数</div>';
+            parametersList.innerHTML = `<div style="text-align: center; color: #999; padding: 20px;">${t('live2d.parameterEditor.noParametersFound', '未找到匹配的参数')}</div>`;
             return;
         }
         
@@ -886,7 +978,7 @@
                     
                     const resetBtn = document.createElement('button');
                     resetBtn.className = 'btn-reset';
-                    resetBtn.textContent = '重置';
+                    resetBtn.textContent = t('live2d.parameterEditor.reset', '重置');
                     
                     const updateParameter = (value) => {
                         const numValue = parseFloat(value);
@@ -954,13 +1046,13 @@
         }
         
         displayParameters();
-        showStatus('已重置所有参数', 2000);
+        showStatus(t('live2d.parameterEditor.resetAllParameters', '已重置所有参数'), 2000);
     });
 
     saveBtn.addEventListener('click', async () => {
         if (!currentModelInfo || !live2dModel) return;
         
-        showStatus('正在保存参数...');
+        showStatus(t('live2d.parameterEditor.savingParameters', '正在保存参数...'));
         
         const paramsToSave = {};
         if (live2dModel.internalModel && live2dModel.internalModel.coreModel) {
@@ -1009,18 +1101,18 @@
             );
             
             if (fileResult.success && prefSuccess) {
-                showStatus('参数保存成功！', 2000);
+                showStatus(t('live2d.parameterEditor.parametersSaved', '参数保存成功！'), 2000);
                 // 通知主页重新应用参数
                 sendMessageToMainPage('reload_model_parameters');
             } else {
                 const errors = [];
-                if (!fileResult.success) errors.push('模型目录文件保存失败');
-                if (!prefSuccess) errors.push('用户偏好设置保存失败');
-                showStatus('参数保存部分失败: ' + errors.join(', '), 3000);
+                if (!fileResult.success) errors.push(t('live2d.parameterEditor.modelDirectorySaveFailed', '模型目录文件保存失败'));
+                if (!prefSuccess) errors.push(t('live2d.parameterEditor.userPreferencesSaveFailed', '用户偏好设置保存失败'));
+                showStatus(t('live2d.parameterEditor.parametersSavePartialFailed', '参数保存部分失败: {{errors}}', {errors: errors.join(', ')}), 3000);
                 console.error('参数保存失败:', errors);
             }
         } catch (error) {
-            showStatus('参数保存失败: ' + error.message, 3000);
+            showStatus(t('live2d.parameterEditor.parametersSaveFailed', '参数保存失败: {{error}}', {error: error.message}), 3000);
             console.error('参数保存失败:', error);
         }
     });

@@ -16,8 +16,8 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
             this._savedParamsTimer = null;
         }
         
-        // 先清空常驻表情记录和初始参数（常驻表情已禁用，但保留清理逻辑以防万一）
-        // this.teardownPersistentExpressions();
+        // 先清空常驻表情记录和初始参数
+        this.teardownPersistentExpressions();
         this.initialParameters = {};
 
         // 还原 coreModel.update 覆盖
@@ -187,9 +187,9 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
             }
         }
 
-        // 常驻表情功能已禁用
-        // try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
-        // await this.setupPersistentExpressions();
+        // 设置常驻表情
+        try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
+        await this.setupPersistentExpressions();
 
         // 记录模型的初始参数（用于expression重置）
         this.recordInitialParameters();
@@ -242,7 +242,10 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                                     'ParamArm', 'ParamHand', 'ParamShoulder', 'ParamElbow', 'ParamWrist'];
             const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
             
-            // 每100ms应用一次保存的参数（覆盖常驻表情，但保持动画）
+            // 获取常驻表情的所有参数ID集合（用于保护去水印等常驻表情参数）
+            const persistentParamIds = this.getPersistentExpressionParamIds();
+            
+            // 每100ms应用一次保存的参数（但跳过常驻表情已设置的参数，保护去水印等功能）
             this._savedParamsTimer = setInterval(() => {
                 if (!this.currentModel || !this.currentModel.internalModel || !this.currentModel.internalModel.coreModel) {
                     return;
@@ -250,6 +253,7 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                 
                 const coreModel = this.currentModel.internalModel.coreModel;
                 let appliedCount = 0;
+                let skippedPersistentCount = 0;
                 
                 for (const [paramId, value] of Object.entries(this.savedModelParameters)) {
                     // 跳过口型参数（口型参数由口型同步控制）
@@ -258,6 +262,11 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                     if (animationParams.includes(paramId)) continue;
                     // 跳过 param_${i} 格式的参数（这些可能是动画参数，不确定）
                     if (paramId.startsWith('param_')) continue;
+                    // 跳过常驻表情已设置的参数（保护去水印等功能，同时允许用户设置其他参数）
+                    if (persistentParamIds.has(paramId)) {
+                        skippedPersistentCount++;
+                        continue;
+                    }
                     
                     try {
                         // 只对明确的外观参数ID进行覆盖
@@ -269,6 +278,10 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                     } catch (_) {}
                 }
                 
+                // 调试信息（仅在开发时输出）
+                // if (appliedCount > 0 || skippedPersistentCount > 0) {
+                //     console.log(`应用用户参数: ${appliedCount}个, 跳过常驻表情参数: ${skippedPersistentCount}个`);
+                // }
             }, 100); // 每100ms应用一次
         }
         
@@ -388,9 +401,9 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
                     }
                 }
 
-                // 常驻表情功能已禁用
-                // try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
-                // await this.setupPersistentExpressions();
+                // 设置常驻表情
+                try { await this.syncEmotionMappingWithServer({ replacePersistentOnly: true }); } catch(_) {}
+                await this.setupPersistentExpressions();
 
                 // 调用回调函数
                 if (this.onModelLoaded) {
@@ -460,10 +473,21 @@ Live2DManager.prototype.installMouthOverride = function() {
                 } catch (_) {}
             }
             
-            // 2. 常驻表情功能已禁用（不再写入常驻表情参数）
-            // if (this.persistentExpressionParamsByName) {
-            //     ...
-            // }
+            // 2. 写入常驻表情参数（跳过口型参数以避免覆盖lipsync）
+            if (this.persistentExpressionParamsByName) {
+                const lipSyncParams = ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
+                for (const name in this.persistentExpressionParamsByName) {
+                    const params = this.persistentExpressionParamsByName[name];
+                    if (Array.isArray(params)) {
+                        for (const p of params) {
+                            if (lipSyncParams.includes(p.Id)) continue;
+                            try {
+                                coreModel.setParameterValueById(p.Id, p.Value);
+                            } catch (_) {}
+                        }
+                    }
+                }
+            }
             
             // 3. 强制写入保存的模型参数（优先级最高，覆盖常驻表情参数，但跳过口型参数和动画参数）
             // 注意：暂时禁用每帧应用，改用定时器定期应用，避免影响动画
@@ -553,11 +577,19 @@ Live2DManager.prototype.applyModelParameters = function(model, parameters) {
     const coreModel = model.internalModel.coreModel;
     let appliedCount = 0;
     
+    // 获取常驻表情的所有参数ID集合（用于保护去水印等常驻表情参数）
+    const persistentParamIds = this.getPersistentExpressionParamIds();
+    
     for (const paramId in parameters) {
         if (parameters.hasOwnProperty(paramId)) {
             try {
                 const value = parameters[paramId];
                 if (typeof value !== 'number' || !Number.isFinite(value)) {
+                    continue;
+                }
+                
+                // 跳过常驻表情已设置的参数（保护去水印等功能）
+                if (persistentParamIds.has(paramId)) {
                     continue;
                 }
                 
@@ -589,5 +621,25 @@ Live2DManager.prototype.applyModelParameters = function(model, parameters) {
     }
     
     // 参数已应用
+};
+
+// 获取常驻表情的所有参数ID集合（用于保护去水印等常驻表情参数）
+Live2DManager.prototype.getPersistentExpressionParamIds = function() {
+    const paramIds = new Set();
+    
+    if (this.persistentExpressionParamsByName) {
+        for (const name in this.persistentExpressionParamsByName) {
+            const params = this.persistentExpressionParamsByName[name];
+            if (Array.isArray(params)) {
+                for (const p of params) {
+                    if (p && p.Id) {
+                        paramIds.add(p.Id);
+                    }
+                }
+            }
+        }
+    }
+    
+    return paramIds;
 };
 
