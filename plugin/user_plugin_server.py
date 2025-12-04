@@ -155,7 +155,8 @@ async def list_plugins():
                     })
                 result.append(plugin_info)
 
-            logger.info(result)
+            logger.debug("Loaded plugins: %s", result)
+
             return {"plugins": result, "message": ""}
 
         else:
@@ -300,8 +301,18 @@ def _load_plugins_from_toml() -> None:
                             # prefer instance method matching eid
                             if hasattr(instance, eid):
                                 handler_fn = getattr(instance, eid)
-                                _event_handlers[f"{pid}.{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
-                                _event_handlers[f"{pid}:plugin_entry:{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
+                            # 创建一个简单的元数据对象
+                            @dataclass
+                            class SimpleEntryMeta:
+                                event_type: str = "plugin_entry"
+                                id: str = eid
+                                name: str = ent.get("name", "") if isinstance(ent, dict) else ""
+                                description: str = ent.get("description", "") if isinstance(ent, dict) else ""
+                                input_schema: dict = field(default_factory=lambda: ent.get("input_schema", {}) if isinstance(ent, dict) else {})
+                            
+                            entry_meta = SimpleEntryMeta()
+                            _event_handlers[f"{pid}.{eid}"] = EventHandler(meta=entry_meta, handler=handler_fn)
+                            _event_handlers[f"{pid}:plugin_entry:{eid}"] = EventHandler(meta=entry_meta, handler=handler_fn)
                         except Exception as e:
                                 logger.debug("Failed to register entry %s for plugin %s: %s",eid,pid,e,exc_info=True)
                                 continue
@@ -317,8 +328,8 @@ def _load_plugins_from_toml() -> None:
                 logger.exception("Failed to auto-register EventMeta handlers for plugin %s", pid)
  
             logger.info("Loaded plugin %s from %s (%s)", pid, toml_path, entry)
-        except Exception as e:
-            logger.exception("Failed to load plugin from %s", toml_path, e)
+        except Exception:
+            logger.exception("Failed to load plugin from %s", toml_path)
 # NOTE: Registration endpoints are intentionally not exposed per request.
 # The server exposes plugin listing and event ingestion endpoints and a small in-process helper
 # so task_executor can either call GET /plugins remotely or import main_helper.user_plugin_server.get_plugins
