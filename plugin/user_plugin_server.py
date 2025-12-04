@@ -303,8 +303,8 @@ def _load_plugins_from_toml() -> None:
                                 _event_handlers[f"{pid}.{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
                                 _event_handlers[f"{pid}:plugin_entry:{eid}"] = EventHandler(meta=type("M", (), {"event_type":"plugin_entry","id":eid,"input_schema":ent.get("input_schema",{}) if isinstance(ent, dict) else {}})(), handler=handler_fn)
                         except Exception as e:
-                            logger.debug("Failed to check event_type for %s.%s: %s", pid, name, e)
-                            continue
+                                logger.debug("Failed to register entry %s for plugin %s: %s",eid,pid,e,exc_info=True)
+                                continue
                 except Exception:
                     # ignore if plugin.toml doesn't list entries in expected format
                     pass
