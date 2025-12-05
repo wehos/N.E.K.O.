@@ -40,7 +40,7 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
     async def async_worker():
         """异步TTS worker主循环"""
         if free_mode:
-            tts_url = "ws://47.100.209.206:9806" # 还在备案，之后会换成wss+域名
+            tts_url = "wss://lanlan.tech/tts"
         else:
             tts_url = "wss://api.stepfun.com/v1/realtime/audio?model=step-tts-mini"
         ws = None
@@ -48,6 +48,7 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
         receive_task = None
         session_id = None
         session_ready = asyncio.Event()
+        response_done = asyncio.Event()  # 用于标记当前响应是否完成
         
         try:
             # 连接WebSocket
@@ -154,6 +155,10 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                                     response_queue.put(resampled.tobytes())
                             except Exception as e:
                                 logger.error(f"处理音频数据时出错: {e}")
+                        elif event_type in ["tts.response.done", "tts.response.audio.done"]:
+                            # 服务器明确表示音频生成完成，设置完成标志
+                            logger.debug(f"收到响应完成事件: {event_type}")
+                            response_done.set()
                 except websockets.exceptions.ConnectionClosed:
                     pass
                 except Exception as e:
@@ -173,11 +178,36 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                     # 提交缓冲区完成当前合成
                     if ws and session_id and current_speech_id is not None:
                         try:
+                            response_done.clear()  # 清除完成标志，准备等待新的完成事件
                             done_event = {
                                 "type": "tts.text.done",
                                 "data": {"session_id": session_id}
                             }
                             await ws.send(json.dumps(done_event))
+                            # 等待服务器返回响应完成事件，然后关闭连接
+                            try:
+                                await asyncio.wait_for(response_done.wait(), timeout=30.0)
+                                logger.debug("音频生成完成，主动关闭连接")
+                            except asyncio.TimeoutError:
+                                logger.warning("等待响应完成超时（30秒），强制关闭连接")
+                            
+                            # 主动关闭连接，避免连接一直保持到超时
+                            if ws:
+                                try:
+                                    await ws.close()
+                                except:
+                                    pass
+                                ws = None
+                            if receive_task and not receive_task.done():
+                                receive_task.cancel()
+                                try:
+                                    await receive_task
+                                except asyncio.CancelledError:
+                                    pass
+                                receive_task = None
+                            session_id = None
+                            session_ready.clear()
+                            current_speech_id = None  # 清空ID以便下次重连
                         except Exception as e:
                             logger.error(f"完成生成失败: {e}")
                     continue
@@ -185,6 +215,7 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                 # 新的语音ID，重新建立连接
                 if current_speech_id != sid:
                     current_speech_id = sid
+                    response_done.clear()
                     if ws:
                         try:
                             await ws.close()
@@ -264,6 +295,10 @@ def step_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                                                 response_queue.put(resampled.tobytes())
                                         except Exception as e:
                                             logger.error(f"处理音频数据时出错: {e}")
+                                    elif event_type in ["tts.response.done", "tts.response.audio.done"]:
+                                        # 服务器明确表示音频生成完成，设置完成标志
+                                        logger.debug(f"收到响应完成事件: {event_type}")
+                                        response_done.set()
                             except websockets.exceptions.ConnectionClosed:
                                 pass
                             except Exception as e:
@@ -348,6 +383,7 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
         current_speech_id = None
         receive_task = None
         session_ready = asyncio.Event()
+        response_done = asyncio.Event()  # 用于标记当前响应是否完成
         
         try:
             # 连接WebSocket
@@ -427,6 +463,10 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                                 response_queue.put(resampled.tobytes())
                             except Exception as e:
                                 logger.error(f"处理音频数据时出错: {e}")
+                        elif event_type in ["response.done", "response.audio.done", "output.done"]:
+                            # 服务器明确表示音频生成完成，设置完成标志
+                            logger.debug(f"收到响应完成事件: {event_type}")
+                            response_done.set()
                 except websockets.exceptions.ConnectionClosed:
                     pass
                 except Exception as e:
@@ -447,10 +487,34 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                     # 提交缓冲区完成当前合成（仅当之前有文本时）
                     if ws and session_ready.is_set() and current_speech_id is not None:
                         try:
+                            response_done.clear()  # 清除完成标志，准备等待新的完成事件
                             await ws.send(json.dumps({
                                 "type": "input_text_buffer.commit",
                                 "event_id": f"event_{int(time.time() * 1000)}_interrupt_commit"
                             }))
+                            # 等待服务器返回响应完成事件，然后关闭连接
+                            try:
+                                await asyncio.wait_for(response_done.wait(), timeout=30.0)
+                                logger.debug("音频生成完成，主动关闭连接")
+                            except asyncio.TimeoutError:
+                                logger.warning("等待响应完成超时（30秒），强制关闭连接")
+                            
+                            # 主动关闭连接，避免连接一直保持到超时
+                            if ws:
+                                try:
+                                    await ws.close()
+                                except:
+                                    pass
+                                ws = None
+                            if receive_task and not receive_task.done():
+                                receive_task.cancel()
+                                try:
+                                    await receive_task
+                                except asyncio.CancelledError:
+                                    pass
+                                receive_task = None
+                            session_ready.clear()
+                            current_speech_id = None  # 清空ID以便下次重连
                         except Exception as e:
                             logger.error(f"提交缓冲区失败: {e}")
                     continue
@@ -459,6 +523,7 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                 # 直接关闭旧连接，打断旧语音
                 if current_speech_id != sid:
                     current_speech_id = sid
+                    response_done.clear()
                     if ws:
                         try:
                             await ws.close()
@@ -516,6 +581,10 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                                             response_queue.put(resampled.tobytes())
                                         except Exception as e:
                                             logger.error(f"处理音频数据时出错: {e}")
+                                    elif event_type in ["response.done", "response.audio.done", "output.done"]:
+                                        # 服务器明确表示音频生成完成，设置完成标志
+                                        logger.debug(f"收到响应完成事件: {event_type}")
+                                        response_done.set()
                             except websockets.exceptions.ConnectionClosed:
                                 pass
                             except Exception as e:
@@ -545,7 +614,6 @@ def qwen_realtime_tts_worker(request_queue, response_queue, audio_api_key, voice
                     logger.error(f"发送TTS文本失败: {e}")
                     # 连接已关闭，标记为无效以便下次重连
                     ws = None
-                    session_id = None
                     current_speech_id = None  # 清空ID以强制下次重连
                     session_ready.clear()
                     if receive_task and not receive_task.done():
