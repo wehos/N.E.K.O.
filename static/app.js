@@ -2800,7 +2800,7 @@ function init_app(){
         _checkLock: false,          // 防止并发检查
         
         // 最小检查间隔（毫秒）- 严格限制请求频率
-        MIN_CHECK_INTERVAL: 5000,
+        MIN_CHECK_INTERVAL: 3000,
         
         // 获取当前状态
         getState() { return this._state; },
@@ -2958,7 +2958,7 @@ function init_app(){
     // Agent 定时检查器（暴露到 window 供 live2d-ui.js 调用）
     let agentCheckInterval = null;
     let lastFlagsSyncTime = 0;
-    const FLAGS_SYNC_INTERVAL = 5000; // 提高到5秒同步一次后端flags状态，减少请求
+    const FLAGS_SYNC_INTERVAL = 3000; // 3秒同步一次后端flags状态
     
     // 【改用状态机】追踪 Agent 弹窗是否打开
     let isAgentPopupOpen = false;
@@ -3009,6 +3009,12 @@ function init_app(){
                 const healthOk = await checkToolServerHealth();
                 agentStateMachine.updateCache(healthOk, null);
                 
+                // 【竞态保护】检查完成后，如果弹窗已关闭，跳过UI更新
+                if (!agentStateMachine._popupOpen) {
+                    console.log('[App] 轮询检查完成但弹窗已关闭，跳过UI更新');
+                    return;
+                }
+                
                 const wasDisabled = agentMasterCheckbox.disabled;
                 if (healthOk) {
                     agentMasterCheckbox.disabled = false;
@@ -3027,10 +3033,13 @@ function init_app(){
                 }
             } catch (e) {
                 agentStateMachine.updateCache(false, null);
-                agentMasterCheckbox.disabled = true;
-                agentMasterCheckbox.title = window.t ? window.t('settings.toggles.serverOffline') : 'Agent服务器未启动';
-                if (typeof agentMasterCheckbox._updateStyle === 'function') agentMasterCheckbox._updateStyle();
-                agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
+                // 【竞态保护】弹窗已关闭时不更新UI
+                if (agentStateMachine._popupOpen) {
+                    agentMasterCheckbox.disabled = true;
+                    agentMasterCheckbox.title = window.t ? window.t('settings.toggles.serverOffline') : 'Agent服务器未启动';
+                    if (typeof agentMasterCheckbox._updateStyle === 'function') agentMasterCheckbox._updateStyle();
+                    agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
+                }
             } finally {
                 // 确保释放检查锁
                 agentStateMachine.releaseCheckLock();
@@ -3165,8 +3174,8 @@ function init_app(){
         // 立即检查一次
         checkAgentCapabilities();
         
-        // 每2秒检查一次（降低频率，减少请求）
-        agentCheckInterval = setInterval(checkAgentCapabilities, 2000);
+        // 每1秒检查一次
+        agentCheckInterval = setInterval(checkAgentCapabilities, 1000);
     };
     
     // 停止 Agent 可用性定时检查（由 Agent 总开关关闭时调用）
@@ -3697,9 +3706,23 @@ function init_app(){
                     const ok = await checkToolServerHealth();
                     agentStateMachine.updateCache(ok, null);
                     
+                    // 【竞态保护】检查完成后，验证弹窗仍打开且状态仍是CHECKING
+                    // 如果弹窗已关闭或状态已改变，跳过UI更新，只保留缓存结果
+                    if (!agentStateMachine._popupOpen || agentStateMachine.getState() !== AgentPopupState.CHECKING) {
+                        console.log('[App] 弹窗已关闭或状态已改变，跳过UI更新');
+                        return;
+                    }
+                    
                     if (ok) {
                         // 服务器在线，同步 flags 状态
                         const analyzerEnabled = await syncFlagsFromBackend();
+                        
+                        // 【竞态保护】再次检查状态，syncFlagsFromBackend也是异步的
+                        if (!agentStateMachine._popupOpen) {
+                            console.log('[App] flags同步完成但弹窗已关闭，跳过UI更新');
+                            return;
+                        }
+                        
                         agentStateMachine.transition(AgentPopupState.ONLINE, 'server online');
                         
                         // 启用总开关，恢复title
@@ -3728,10 +3751,13 @@ function init_app(){
                     // 检查失败
                     console.error('[App] Agent 健康检查失败:', e);
                     agentStateMachine.updateCache(false, null);
-                    agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
-                    agentMasterCheckbox.checked = false;
-                    resetSubCheckboxes();
-                    window.startAgentAvailabilityCheck();
+                    // 【竞态保护】弹窗已关闭时不更新状态
+                    if (agentStateMachine._popupOpen) {
+                        agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
+                        agentMasterCheckbox.checked = false;
+                        resetSubCheckboxes();
+                        window.startAgentAvailabilityCheck();
+                    }
                 } finally {
                     // 确保释放检查锁
                     agentStateMachine.releaseCheckLock();
