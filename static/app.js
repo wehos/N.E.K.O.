@@ -3004,8 +3004,8 @@ function init_app(){
             }
             
             // 执行连通性检查
+            agentStateMachine.recordCheck();
             try {
-                agentStateMachine.recordCheck();
                 const healthOk = await checkToolServerHealth();
                 agentStateMachine.updateCache(healthOk, null);
                 
@@ -3031,6 +3031,9 @@ function init_app(){
                 agentMasterCheckbox.title = window.t ? window.t('settings.toggles.serverOffline') : 'Agent服务器未启动';
                 if (typeof agentMasterCheckbox._updateStyle === 'function') agentMasterCheckbox._updateStyle();
                 agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
+            } finally {
+                // 确保释放检查锁
+                agentStateMachine.releaseCheckLock();
             }
             return;
         }
