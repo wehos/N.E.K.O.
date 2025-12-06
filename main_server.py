@@ -535,7 +535,8 @@ async def initialize_language(request: Request):
                 "success": True,
                 "message": "Language already initialized",
                 "language": language,
-                "updated": False
+                "updated": False,
+                "updated_count": 0
             }
         
         # 获取对应语言的默认 prompt
@@ -560,10 +561,13 @@ async def initialize_language(request: Request):
                 updated_count += 1
                 logger.info(f"[i18n] 更新角色 '{catgirl_name}' 的 prompt 为 {language} 版本")
         
-        # 保存更新后的角色配置
+        # 保存更新后的角色配置并刷新内存
         if updated_count > 0:
             character_data['猫娘'] = catgirl_data
             config_manager.save_characters(character_data)
+            # 刷新内存中的角色配置，使新的 prompt 立即生效
+            await initialize_character_data()
+            logger.info("[i18n] 已刷新内存中的角色配置")
         
         # 保存语言初始化标记
         language_config = {
@@ -579,7 +583,7 @@ async def initialize_language(request: Request):
             "success": True,
             "message": f"Language initialized to {language}",
             "language": language,
-            "updated": True,
+            "updated": updated_count > 0,
             "updated_count": updated_count
         }
         
