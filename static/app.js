@@ -2473,6 +2473,32 @@ function init_app(){
         }
         console.log('[App] 设置 goodbyeClicked 为 true，当前状态:', window.live2dManager ? window.live2dManager._goodbyeClicked : 'undefined');
         
+        // 【修复】立即关闭所有弹窗，防止遗留的弹窗区域阻塞鼠标事件
+        // 这里直接操作 DOM，不使用动画延迟，确保弹窗立即完全隐藏
+        // 注意：需要同时选中 live2d-popup-* 和 live2d-mic-popup（麦克风弹窗ID格式不同）
+        const allPopups = document.querySelectorAll('[id^="live2d-popup-"], #live2d-mic-popup');
+        allPopups.forEach(popup => {
+            popup.style.setProperty('display', 'none', 'important');
+            popup.style.setProperty('visibility', 'hidden', 'important');
+            popup.style.setProperty('opacity', '0', 'important');
+            popup.style.setProperty('pointer-events', 'none', 'important');
+        });
+        // 同时清除所有弹窗定时器
+        if (window.live2dManager && window.live2dManager._popupTimers) {
+            Object.values(window.live2dManager._popupTimers).forEach(timer => {
+                if (timer) clearTimeout(timer);
+            });
+            window.live2dManager._popupTimers = {};
+        }
+        console.log('[App] 已关闭所有弹窗，数量:', allPopups.length);
+        
+        // 【修复】禁用 Live2D canvas 的鼠标事件，防止解锁状态下的 canvas 阻塞鼠标事件
+        const live2dCanvas = document.getElementById('live2d-canvas');
+        if (live2dCanvas) {
+            live2dCanvas.style.setProperty('pointer-events', 'none', 'important');
+            console.log('[App] 已禁用 live2d-canvas 的鼠标事件');
+        }
+        
         // 在隐藏 DOM 之前先读取 "请她离开" 按钮的位置（避免隐藏后 getBoundingClientRect 返回异常）
         const goodbyeButton = document.getElementById('live2d-btn-goodbye');
         let savedGoodbyeRect = null;
@@ -2622,6 +2648,16 @@ function init_app(){
             live2dContainer.style.removeProperty('opacity');
         }
         
+        // 【修复】恢复 Live2D canvas 的鼠标事件（根据锁定状态决定）
+        const live2dCanvas = document.getElementById('live2d-canvas');
+        if (live2dCanvas) {
+            // 根据当前锁定状态恢复 pointerEvents
+            const isLocked = window.live2dManager ? window.live2dManager.isLocked : true;
+            live2dCanvas.style.removeProperty('pointer-events');
+            live2dCanvas.style.pointerEvents = isLocked ? 'none' : 'auto';
+            console.log('[App] 已恢复 live2d-canvas 的鼠标事件，isLocked:', isLocked);
+        }
+        
         // 第五步：恢复锁按钮
         const lockIcon = document.getElementById('live2d-lock-icon');
         if (lockIcon) {
@@ -2665,15 +2701,68 @@ function init_app(){
             }
         }
         
-        // 第八步：触发原有的返回逻辑
-        if (returnSessionButton) {
-            setTimeout(() => {
-                console.log('[App] 触发returnSessionButton点击');
-                returnSessionButton.click();
-            }, 10);
-        } else {
-            console.error('[App] ❌ returnSessionButton 未找到！');
+        // 第八步：恢复基本的按钮状态（但不自动开始新会话）
+        // 注意：不再触发 returnSessionButton.click()，因为那会自动发送 start_session 消息
+        // 用户只是想让形象回来，不需要自动开始语音或文本对话
+        
+        // 设置模式切换标志
+        isSwitchingMode = true;
+        
+        // 清除所有语音相关的状态类（确保按钮不会显示为激活状态）
+        micButton.classList.remove('recording');
+        micButton.classList.remove('active');
+        screenButton.classList.remove('active');
+        
+        // 确保停止录音状态
+        isRecording = false;
+        window.isRecording = false;
+        
+        // 同步更新Live2D浮动按钮的状态
+        if (window.live2dManager && window.live2dManager._floatingButtons) {
+            ['mic', 'screen'].forEach(buttonId => {
+                const buttonData = window.live2dManager._floatingButtons[buttonId];
+                if (buttonData && buttonData.button) {
+                    buttonData.button.dataset.active = 'false';
+                    if (buttonData.imgOff) {
+                        buttonData.imgOff.style.opacity = '1';
+                    }
+                    if (buttonData.imgOn) {
+                        buttonData.imgOn.style.opacity = '0';
+                    }
+                }
+            });
         }
+        
+        // 启用所有基本输入按钮
+        micButton.disabled = false;
+        textSendButton.disabled = false;
+        textInputBox.disabled = false;
+        screenshotButton.disabled = false;
+        resetSessionButton.disabled = false;
+        
+        // 禁用语音控制按钮（文本模式下不需要）
+        muteButton.disabled = true;
+        screenButton.disabled = true;
+        stopButton.disabled = true;
+        
+        // 显示文本输入区
+        const textInputArea = document.getElementById('text-input-area');
+        if (textInputArea) {
+            textInputArea.classList.remove('hidden');
+        }
+        
+        // 标记文本会话为非活跃状态（用户需要手动发送消息才会开始会话）
+        isTextSessionActive = false;
+        
+        // 显示欢迎消息，提示用户可以开始对话
+        showStatusToast(window.t ? window.t('app.welcomeBack', {name: lanlan_config.lanlan_name}) : `🫴 ${lanlan_config.lanlan_name}回来了！`, 3000);
+        
+        // 延迟重置模式切换标志
+        setTimeout(() => {
+            isSwitchingMode = false;
+        }, 500);
+        
+        console.log('[App] 请她回来完成，未自动开始会话，等待用户主动发起对话');
     });
     
     // ========== Agent控制逻辑 ==========

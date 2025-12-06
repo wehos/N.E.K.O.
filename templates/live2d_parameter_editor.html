@@ -1034,14 +1034,14 @@
         if (!live2dModel || !live2dModel.internalModel || !live2dModel.internalModel.coreModel) return;
         
         const coreModel = live2dModel.internalModel.coreModel;
-        for (const [paramId, initialValue] of Object.entries(initialParameters)) {
+        const paramCount = coreModel.getParameterCount();
+        
+        // 将所有参数重置为零
+        for (let i = 0; i < paramCount; i++) {
             try {
-                const index = coreModel.getParameterIndex(paramId);
-                if (index >= 0) {
-                    coreModel.setParameterValueByIndex(index, initialValue);
-                }
+                coreModel.setParameterValueByIndex(i, 0);
             } catch (e) {
-                console.warn(`重置参数 ${paramId} 失败:`, e);
+                console.warn(`重置参数索引 ${i} 失败:`, e);
             }
         }
         

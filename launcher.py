@@ -92,7 +92,7 @@ def run_memory_server(ready_event: Event):
         # 使用 Server 对象，在启动后通知父进程
         config = uvicorn.Config(
             app=memory_server.app,
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=MEMORY_SERVER_PORT,
             log_level="error"
         )
@@ -154,7 +154,7 @@ def run_agent_server(ready_event: Event):
         # Agent Server 不需要等待，立即通知就绪
         ready_event.set()
         
-        uvicorn.run(agent_server.app, host="0.0.0.0", port=TOOL_SERVER_PORT, log_level="error")
+        uvicorn.run(agent_server.app, host="127.0.0.1", port=TOOL_SERVER_PORT, log_level="error")
     except Exception as e:
         print(f"Agent Server error: {e}")
         import traceback
@@ -181,7 +181,7 @@ def run_main_server(ready_event: Event):
         # 直接运行 FastAPI app，不依赖 main_server 的 __main__ 块
         config = uvicorn.Config(
             app=main_server.app,
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=MAIN_SERVER_PORT,
             log_level="error",
             loop="asyncio",

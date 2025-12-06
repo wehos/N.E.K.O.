@@ -559,12 +559,9 @@
             
             await loadModel(modelName, currentModelInfo, modelSteamId);
             
-            // 自动保存模型设置到角色，同时传入item_id
-            const saveSuccess = await saveModelToCharacter(modelName, modelSteamId);
-            if (!saveSuccess) {
-                // 如果自动保存失败，标记为有未保存的更改
-                window.hasUnsavedChanges = true;
-            }
+            // 不自动保存模型到角色，改为标记为有未保存更改，用户需手动点击“保存设置”
+            window.hasUnsavedChanges = true;
+            console.log('已标记为未保存更改（模型切换），请点击 保存设置 持久化到角色配置。');
         });
 
         // 加载模型的函数
@@ -688,7 +685,7 @@
                 if (currentModelFiles.motion_files.length === 0) {
                     motionSelect.disabled = true;
                     playMotionBtn.disabled = true;
-                    motionSelect.innerHTML = `<option value="">${t('live2d.noMotionFiles', '该模型没有动作文件')}</option>`;
+                    motionSelect.innerHTML = `<option value="">${t('live2d.noMotionFiles', '没有动作文件')}</option>`;
                 }
                 setControlsDisabled(false);
                 showStatus(t('live2d.modelLoadSuccess', `模型 ${modelName} 加载成功`, {model: modelName}));
@@ -705,7 +702,7 @@
             
             // 检查是否有动作文件
             if (currentModelFiles.motion_files.length === 0) {
-                showStatus(t('live2d.noMotionFilesStatus', '该模型没有动作文件'), 2000);
+                showStatus(t('live2d.noMotionFilesStatus', '没有动作文件'), 2000);
                 return;
             }
             

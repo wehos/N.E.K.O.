@@ -81,6 +81,13 @@
         .btn:active { background: #1e4a9e; }
         .btn.secondary { background: #6c757d; }
         .btn.secondary:hover { background: #545b62; }
+        .hint {
+            font-weight: normal;
+            font-size: 0.85rem;
+            color: #888;
+            margin-top: -4px;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
@@ -95,6 +102,7 @@
 
     <div class="field-row">
         <label data-i18n="voice.customPrefix">自定义前缀（阿里云需要）</label>
+        <label class="hint" data-i18n="voice.customPrefixNote">不超过10个字符，只支持数字和英文字母</label>
         <input type="text" id="prefix" data-i18n-placeholder="voice.prefixPlaceholder" placeholder="不超过10个字符，只支持数字和英文字母" required style="max-width: 600px;">
     </div>
 

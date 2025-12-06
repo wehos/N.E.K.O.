@@ -32,7 +32,7 @@ class Live2DManager {
         this.isEmotionChanging = false;
         this.dragEnabled = false;
         this.isFocusing = false;
-        this.isLocked = true;
+        this.isLocked = false;
         this.onModelLoaded = null;
         this.onStatusUpdate = null;
         this.modelName = null; // 记录当前模型目录名
@@ -71,9 +71,11 @@ class Live2DManager {
         // 记录最后一次加载模型的原始路径（用于保存偏好时使用）
         this._lastLoadedModelPath = null;
 
-        // ⚠️ 已禁用自动保存功能：
-        // 不再在窗口关闭/刷新时自动保存模型位置
-        // 只有在模型设置页面手动点击"保存设置"按钮时才会保存位置和缩放
+        // 防抖定时器（用于滚轮缩放等连续操作后保存位置）
+        this._savePositionDebounceTimer = null;
+
+        // ⚠️ 已启用自动保存功能：
+        // 在拖动或缩放模型后自动保存位置和缩放
     }
 
     // 从 FileReferences 推导 EmotionMapping（用于兼容历史数据）

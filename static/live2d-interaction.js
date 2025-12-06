@@ -34,6 +34,9 @@ Live2DManager.prototype.setupDragAndDrop = function(model) {
         if (isDragging) {
             isDragging = false;
             document.getElementById('live2d-canvas').style.cursor = 'grab';
+            
+            // 拖拽结束后自动保存位置
+            this._savePositionAfterInteraction();
         }
     };
 
@@ -85,6 +88,9 @@ Live2DManager.prototype.setupWheelZoom = function(model) {
         const oldScale = this.currentModel.scale.x;
         let newScale = event.deltaY < 0 ? oldScale * scaleFactor : oldScale / scaleFactor;
         this.currentModel.scale.set(newScale);
+        
+        // 使用防抖动保存缩放，避免滚轮过程中频繁保存
+        this._debouncedSavePosition();
     };
 
     const view = this.pixi_app.view;
@@ -140,6 +146,10 @@ Live2DManager.prototype.setupTouchZoom = function(model) {
     const onTouchEnd = (event) => {
         // 当手指数量小于2时，停止缩放
         if (event.touches.length < 2) {
+            if (isTouchZooming) {
+                // 触摸缩放结束后自动保存位置和缩放
+                this._savePositionAfterInteraction();
+            }
             isTouchZooming = false;
         }
     };
@@ -191,7 +201,8 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
         
         this.isFocusing = true;
         if (lockIcon) lockIcon.style.display = 'block';
-        if (floatingButtons) floatingButtons.style.display = 'flex';
+        // 锁定状态下不显示浮动菜单
+        if (floatingButtons && !this.isLocked) floatingButtons.style.display = 'flex';
         
         // 清除隐藏定时器
         if (this._hideButtonsTimer) {
@@ -336,5 +347,49 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
             });
         }
     }, 100);
+};
+
+// 交互后保存位置和缩放的辅助函数
+Live2DManager.prototype._savePositionAfterInteraction = function() {
+    if (!this.currentModel || !this._lastLoadedModelPath) {
+        console.debug('无法保存位置：模型或路径未设置');
+        return;
+    }
+    
+    const position = { x: this.currentModel.x, y: this.currentModel.y };
+    const scale = { x: this.currentModel.scale.x, y: this.currentModel.scale.y };
+    
+    // 验证数据有效性
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y) ||
+        !Number.isFinite(scale.x) || !Number.isFinite(scale.y)) {
+        console.warn('位置或缩放数据无效，跳过保存');
+        return;
+    }
+    
+    // 异步保存，不阻塞交互
+    this.saveUserPreferences(this._lastLoadedModelPath, position, scale)
+        .then(success => {
+            if (success) {
+                console.debug('模型位置和缩放已自动保存');
+            } else {
+                console.warn('自动保存位置失败');
+            }
+        })
+        .catch(error => {
+            console.error('自动保存位置时出错:', error);
+        });
+};
+
+// 防抖动保存位置的辅助函数（用于滚轮缩放等连续操作）
+Live2DManager.prototype._debouncedSavePosition = function() {
+    // 清除之前的定时器
+    if (this._savePositionDebounceTimer) {
+        clearTimeout(this._savePositionDebounceTimer);
+    }
+    
+    // 设置新的定时器，500ms后保存
+    this._savePositionDebounceTimer = setTimeout(() => {
+        this._savePositionAfterInteraction();
+    }, 500);
 };
 
