@@ -230,8 +230,6 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
             } catch (e) {
                 console.error('安装口型覆盖失败:', e);
             }
-        } else {
-            console.log('预览页面：已禁用口型覆盖');
         }
         
         // 如果有保存的参数，使用定时器定期应用，确保不被常驻表情覆盖
