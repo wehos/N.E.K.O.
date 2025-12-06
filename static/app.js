@@ -2863,9 +2863,15 @@ function init_app(){
             return (now - this._lastCheckTime) >= this.MIN_CHECK_INTERVAL;
         },
         
-        // 记录检查时间
+        // 记录检查时间并加锁
         recordCheck() {
+            this._checkLock = true;
             this._lastCheckTime = Date.now();
+        },
+        
+        // 释放检查锁
+        releaseCheckLock() {
+            this._checkLock = false;
         },
         
         // 更新缓存
@@ -2910,7 +2916,7 @@ function init_app(){
                         mcp.title = window.t ? window.t('settings.toggles.checking') : '查询中...'; 
                         syncUI(mcp); 
                     }
-                    if (status) status.textContent = 'Agent服务器连接中...';
+                    if (status) status.textContent = window.t ? window.t('agent.status.connecting') : 'Agent服务器连接中...';
                     break;
                     
                 case AgentPopupState.ONLINE:
@@ -2933,7 +2939,7 @@ function init_app(){
                     }
                     if (keyboard) { keyboard.disabled = true; keyboard.checked = false; syncUI(keyboard); }
                     if (mcp) { mcp.disabled = true; mcp.checked = false; syncUI(mcp); }
-                    if (status) status.textContent = 'Agent服务器未启动';
+                    if (status) status.textContent = window.t ? window.t('settings.toggles.serverOffline') : 'Agent服务器未启动';
                     break;
                     
                 case AgentPopupState.PROCESSING:
@@ -3717,11 +3723,15 @@ function init_app(){
                     }
                 } catch (e) {
                     // 检查失败
+                    console.error('[App] Agent 健康检查失败:', e);
                     agentStateMachine.updateCache(false, null);
                     agentStateMachine.transition(AgentPopupState.OFFLINE, 'check failed');
                     agentMasterCheckbox.checked = false;
                     resetSubCheckboxes();
                     window.startAgentAvailabilityCheck();
+                } finally {
+                    // 确保释放检查锁
+                    agentStateMachine.releaseCheckLock();
                 }
             }
         });
