@@ -1,0 +1,22 @@
+# 构建产物标记为 linguist-generated，避免被统计为代码
+# 这些文件由构建脚本自动生成，源文件在 react_web/ 目录下
+
+# React 组件构建产物（从 react_web/app/components/ 构建）
+static/bundles/StatusToast.js linguist-generated=true
+static/bundles/ExampleButton.js linguist-generated=true
+
+# React 核心库构建产物（从 react_web/ 构建）
+static/bundles/react.js linguist-generated=true
+static/bundles/react-dom-client.js linguist-generated=true
+
+# 工具模块构建产物（从 react_web/app/api/global/ 构建）
+static/bundles/react_init.js linguist-generated=true
+static/bundles/request.global.js linguist-generated=true
+static/bundles/request.api.global.js linguist-generated=true
+
+# 构建资源目录
+static/bundles/assets/* linguist-generated=true
+
+# 构建输出目录（如果被提交）
+react_web/build/** linguist-generated=true
+

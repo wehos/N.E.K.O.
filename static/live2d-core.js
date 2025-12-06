@@ -135,13 +135,11 @@ class Live2DManager {
         return this.pixi_app;
     }
 
-    // 加载用户偏好
+    // 加载用户偏好（使用 RequestAPI）
     async loadUserPreferences() {
         try {
-            const response = await fetch('/api/preferences');
-            if (response.ok) {
-                return await response.json();
-            }
+            // 使用 RequestAPI 获取用户偏好
+            return await window.RequestAPI.getUserPreferences();
         } catch (error) {
             console.warn('加载用户偏好失败:', error);
         }
@@ -151,45 +149,7 @@ class Live2DManager {
     // 保存用户偏好
     async saveUserPreferences(modelPath, position, scale, parameters) {
         try {
-            // 验证位置和缩放值是否为有效的有限数值
-            if (!position || typeof position !== 'object' || 
-                !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
-                console.error('位置值无效:', position);
-                return false;
-            }
-            
-            if (!scale || typeof scale !== 'object' || 
-                !Number.isFinite(scale.x) || !Number.isFinite(scale.y)) {
-                console.error('缩放值无效:', scale);
-                return false;
-            }
-            
-            // 验证缩放值必须为正数
-            if (scale.x <= 0 || scale.y <= 0) {
-                console.error('缩放值必须为正数:', scale);
-                return false;
-            }
-            
-            const preferences = {
-                model_path: modelPath,
-                position: position,
-                scale: scale
-            };
-            
-            // 如果有参数，添加到偏好中
-            if (parameters && typeof parameters === 'object') {
-                preferences.parameters = parameters;
-            }
-            
-            const response = await fetch('/api/preferences', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(preferences)
-            });
-            const result = await response.json();
-            return result.success;
+            return await window.RequestAPI.saveUserPreferences(modelPath, position, scale);
         } catch (error) {
             console.error("保存偏好失败:", error);
             return false;

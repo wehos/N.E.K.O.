@@ -60,19 +60,19 @@
     // 从 Steam API 获取语言设置（异步）
     async function getSteamLanguage() {
         try {
-            const response = await fetch('/api/steam_language', {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' },
-                // 设置超时，避免阻塞太久
-                signal: AbortSignal.timeout(2000)
-            });
-            
-            if (!response.ok) {
-                console.log('[i18n] Steam 语言 API 响应异常:', response.status);
+            // 仅使用 RequestAPI
+            if (typeof window === 'undefined' || !window.RequestAPI || typeof window.RequestAPI.getSteamLanguage !== 'function') {
+                console.log('[i18n] RequestAPI 不可用，跳过 Steam 语言获取');
                 return null;
             }
             
-            const data = await response.json();
+            const data = await window.RequestAPI.getSteamLanguage();
+            
+            if (!data) {
+                console.log('[i18n] Steam API 返回空数据，回退到浏览器设置');
+                return null;
+            }
+            
             console.log('[i18n] Steam API 返回语言设置:', data);
             
             if (data.success && data.i18n_language && SUPPORTED_LANGUAGES.includes(data.i18n_language)) {

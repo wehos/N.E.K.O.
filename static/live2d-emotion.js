@@ -160,7 +160,16 @@ Live2DManager.prototype.playExpression = async function(emotion, specifiedExpres
     
     try {
         // 计算表达文件路径（相对模型根目录）
-        const expressionPath = this.resolveAssetPath(choiceFile);
+        let expressionPath = this.resolveAssetPath(choiceFile);
+        // 使用 buildStaticUrl 统一处理静态资源路径（如果可用）
+        if (typeof window !== 'undefined' && typeof window.buildStaticUrl === 'function') {
+            try {
+                expressionPath = window.buildStaticUrl(expressionPath);
+            } catch (e) {
+                // 如果 buildStaticUrl 失败，使用原始路径
+                console.warn('[playExpression] buildStaticUrl 失败，使用原始路径:', e);
+            }
+        }
         const response = await fetch(expressionPath);
         if (!response.ok) {
             throw new Error(`Failed to load expression: ${response.statusText}`);
@@ -308,7 +317,17 @@ Live2DManager.prototype.playMotion = async function(emotion) {
                         
                         // 尝试从motion文件获取持续时间
                         try {
-                            const response = await fetch(motionPath);
+                            // 使用 buildStaticUrl 统一处理静态资源路径（如果可用）
+                            let resolvedMotionPath = motionPath;
+                            if (typeof window !== 'undefined' && typeof window.buildStaticUrl === 'function') {
+                                try {
+                                    resolvedMotionPath = window.buildStaticUrl(motionPath);
+                                } catch (e) {
+                                    // 如果 buildStaticUrl 失败，使用原始路径
+                                    console.warn('[playMotion] buildStaticUrl 失败，使用原始路径:', e);
+                                }
+                            }
+                            const response = await fetch(resolvedMotionPath);
                             if (response.ok) {
                                 const motionData = await response.json();
                                 if (motionData.Meta && motionData.Meta.Duration) {
@@ -601,14 +620,13 @@ Live2DManager.prototype.setEmotion = async function(emotion) {
     }
 };
 
-// 同步服务器端的情绪映射（可仅替换"常驻"表情组）
+// 同步服务器端的情绪映射（使用 RequestAPI）
 Live2DManager.prototype.syncEmotionMappingWithServer = async function(options = {}) {
     const { replacePersistentOnly = true } = options;
     try {
         if (!this.modelName) return;
-        const resp = await fetch(`/api/live2d/emotion_mapping/${encodeURIComponent(this.modelName)}`);
-        if (!resp.ok) return;
-        const data = await resp.json();
+        // 使用 RequestAPI 获取情绪映射
+        const data = await window.RequestAPI.getEmotionMapping(this.modelName);
         if (!data || !data.success || !data.config) return;
 
         const serverMapping = data.config || { motions: {}, expressions: {} };
@@ -659,7 +677,16 @@ Live2DManager.prototype.setupPersistentExpressions = async function() {
 
         for (const file of files) {
             try {
-                const url = this.resolveAssetPath(file);
+                let url = this.resolveAssetPath(file);
+                // 使用 buildStaticUrl 统一处理静态资源路径（如果可用）
+                if (typeof window !== 'undefined' && typeof window.buildStaticUrl === 'function') {
+                    try {
+                        url = window.buildStaticUrl(url);
+                    } catch (e) {
+                        // 如果 buildStaticUrl 失败，使用原始路径
+                        console.warn('[setupPersistentExpressions] buildStaticUrl 失败，使用原始路径:', e);
+                    }
+                }
                 const resp = await fetch(url);
                 if (!resp.ok) continue;
                 const data = await resp.json();

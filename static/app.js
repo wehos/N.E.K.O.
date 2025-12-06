@@ -41,68 +41,9 @@ function init_app(){
     const resetSessionButton = document.getElementById('resetSessionButton');
     const returnSessionButton = document.getElementById('returnSessionButton');
     const statusElement = document.getElementById('status');
-    const statusToast = document.getElementById('status-toast');
     
-    // Status 气泡框显示函数
-    let statusToastTimeout = null;
-    function showStatusToast(message, duration = 3000) {
-        console.log('[Status Toast] 显示消息:', message, '持续时间:', duration);
-        
-        if (!message || message.trim() === '') {
-            // 如果消息为空，隐藏气泡框
-            if (statusToast) {
-                statusToast.classList.remove('show');
-                statusToast.classList.add('hide');
-                setTimeout(() => {
-                    statusToast.textContent = '';
-                }, 300);
-            }
-            return;
-        }
-        
-        if (!statusToast) {
-            console.error('[Status Toast] statusToast 元素不存在！');
-            return;
-        }
-        
-        // 清除之前的定时器
-        if (statusToastTimeout) {
-            clearTimeout(statusToastTimeout);
-            statusToastTimeout = null;
-        }
-        
-        // 更新内容
-        statusToast.textContent = message;
-        
-        // 确保元素可见
-        statusToast.style.display = 'block';
-        statusToast.style.visibility = 'visible';
-        
-        // 显示气泡框
-        statusToast.classList.remove('hide');
-        // 使用 setTimeout 确保样式更新
-        setTimeout(() => {
-            statusToast.classList.add('show');
-            console.log('[Status Toast] 已添加 show 类，元素:', statusToast, '类列表:', statusToast.classList);
-        }, 10);
-        
-        // 自动隐藏
-        statusToastTimeout = setTimeout(() => {
-            statusToast.classList.remove('show');
-            statusToast.classList.add('hide');
-            setTimeout(() => {
-                statusToast.textContent = '';
-            }, 300);
-        }, duration);
-        
-        // 同时更新隐藏的 status 元素（保持兼容性）
-        if (statusElement) {
-            statusElement.textContent = message || '';
-        }
-    }
-    
-    // 将 showStatusToast 暴露到全局作用域，方便调试和测试
-    window.showStatusToast = showStatusToast;
+    // Status 气泡框功能已迁移到 React 组件 (StatusToast)
+    // showStatusToast 函数由 React 组件提供，通过 window.showStatusToast 访问
     const chatContainer = document.getElementById('chatContainer');
     const textInputBox = document.getElementById('textInputBox');
     const textSendButton = document.getElementById('textSendButton');
@@ -171,10 +112,10 @@ function init_app(){
       );
     }
 
-    // 建立WebSocket连接
-    function connectWebSocket() {
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const wsUrl = `${protocol}://${window.location.host}/ws/${lanlan_config.lanlan_name}`;
+    // 建立WebSocket连接（使用 buildWebSocketUrl）
+    async function connectWebSocket() {
+        // 使用 buildWebSocketUrl 统一构建 WebSocket URL（HTML 中已确保初始化）
+        const wsUrl = window.buildWebSocketUrl(`/ws/${lanlan_config.lanlan_name}`);
         console.log('[WebSocket] 正在连接，猫娘名称:', lanlan_config.lanlan_name, 'URL:', wsUrl);
         socket = new WebSocket(wsUrl);
 
@@ -428,7 +369,11 @@ function init_app(){
             // 如果不是正在切换猫娘，才自动重连（避免与手动重连冲突）
             if (!isSwitchingCatgirl) {
                 // 保存 setTimeout ID，以便在 handleCatgirlSwitch 中取消
-                autoReconnectTimeoutId = setTimeout(connectWebSocket, 3000);
+                autoReconnectTimeoutId = setTimeout(() => {
+                    connectWebSocket().catch(err => {
+                        console.error('[WebSocket] 自动重连失败:', err);
+                    });
+                }, 3000);
             }
         };
 
@@ -438,7 +383,9 @@ function init_app(){
     }
 
     // 初始化连接
-    connectWebSocket();
+    connectWebSocket().catch(err => {
+        console.error('[WebSocket] 初始化连接失败:', err);
+    });
 
     // 添加消息到聊天界面
     function appendMessage(text, sender, isNewMessage = true) {
@@ -490,20 +437,16 @@ function init_app(){
     let isFirstUserInput = true; // 跟踪是否为用户第一次输入
     let isFirstAIResponse = true; // 跟踪是否为AI第一次回复
     
-    // 检查并解锁首次对话成就
+    // 检查并解锁首次对话成就（使用 RequestAPI）
     async function checkAndUnlockFirstDialogueAchievement() {
         // 当用户和AI都完成首次交互后调用API
         if (!isFirstUserInput && !isFirstAIResponse) {
             try {
                 console.log('首次对话完成，尝试解锁成就');
-                const response = await fetch('/api/steam/set-achievement-status/ACH_FIRST_DIALOGUE', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
                 
-                if (response.ok) {
+                const success = await window.RequestAPI.unlockSteamAchievement('ACH_FIRST_DIALOGUE');
+                
+                if (success) {
                     console.log('成就解锁API调用成功');
                 } else {
                     console.error('成就解锁API调用失败');
@@ -567,20 +510,12 @@ function init_app(){
         }
     }
     
-    // 保存选择的麦克风到服务器
+    // 保存选择的麦克风到服务器（使用 RequestAPI）
     async function saveSelectedMicrophone(deviceId) {
         try {
-            const response = await fetch('/api/characters/set_microphone', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    microphone_id: deviceId
-                })
-            });
+            const success = await window.RequestAPI.setMicrophone(deviceId);
             
-            if (!response.ok) {
+            if (!success) {
                 console.error('保存麦克风选择失败');
             }
         } catch (err) {
@@ -588,14 +523,10 @@ function init_app(){
         }
     }
     
-    // 加载上次选择的麦克风
+    // 加载上次选择的麦克风（使用 RequestAPI）
     async function loadSelectedMicrophone() {
         try {
-            const response = await fetch('/api/characters/get_microphone');
-            if (response.ok) {
-                const data = await response.json();
-                selectedMicrophoneId = data.microphone_id || null;
-            }
+            selectedMicrophoneId = await window.RequestAPI.getMicrophone();
         } catch (err) {
             console.error('加载麦克风选择失败:', err);
             selectedMicrophoneId = null;
@@ -1692,34 +1623,13 @@ function init_app(){
         }
     });
 
-    // 情感分析功能
+    // 情感分析功能（使用 RequestAPI）
     async function analyzeEmotion(text) {
         console.log('analyzeEmotion被调用，文本:', text);
         try {
-            const response = await fetch('/api/emotion/analysis', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    text: text,
-                    lanlan_name: lanlan_config.lanlan_name
-                })
-            });
-
-            if (!response.ok) {
-                console.warn('情感分析请求失败:', response.status);
-                return null;
-            }
-
-            const result = await response.json();
+            const result = await window.RequestAPI.analyzeEmotion(text, lanlan_config.lanlan_name);
             console.log('情感分析API返回结果:', result);
             
-            if (result.error) {
-                console.warn('情感分析错误:', result.error);
-                return null;
-            }
-
             return result;
         } catch (error) {
             console.error('情感分析请求异常:', error);
@@ -2830,16 +2740,9 @@ function init_app(){
                 cb._autoDisabled = true;  // 标记这是自动关闭，避免change事件处理器再次发送请求
                 cb.dispatchEvent(new Event('change', { bubbles: true }));
                 cb._autoDisabled = false;
-                // 通知后端关闭该功能
+                // 通知后端关闭该功能（使用 RequestAPI）
                 try {
-                    await fetch('/api/agent/flags', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            lanlan_name: lanlan_config.lanlan_name,
-                            flags: {[flagKey]: false}
-                        })
-                    });
+                    await window.RequestAPI.setAgentFlags(lanlan_config.lanlan_name, {[flagKey]: false});
                 } catch(e) {
                     console.warn(`[App] 通知后端关闭${name}失败:`, e);
                 }
@@ -2881,37 +2784,31 @@ function init_app(){
         }
     }
     
-    // 检查Agent服务器健康状态
+    // 检查Agent服务器健康状态（使用 RequestAPI）
     async function checkToolServerHealth() {
         try {
-            const resp = await fetch(`/api/agent/health`);
-            if (!resp.ok) throw new Error('not ok');
-            return true;
+            return await window.RequestAPI.checkAgentHealth();
         } catch (e) {
             return false;
         }
     }
     
-    // 检查Agent能力
+    // 检查Agent能力（使用 RequestAPI）
     async function checkCapability(kind, showError = true) {
-        const apis = {
-            computer_use: { url: '/api/agent/computer_use/availability', name: '键鼠控制' },
-            mcp: { url: '/api/agent/mcp/availability', name: 'MCP工具' }
+        const names = {
+            computer_use: '键鼠控制',
+            mcp: 'MCP工具'
         };
-        const config = apis[kind];
-        if (!config) return false;
+        const name = names[kind] || kind;
         
         try {
-            const r = await fetch(config.url);
-            if (!r.ok) return false;
-            const j = await r.json();
-            if (!j.ready) {
-                if (showError) {
-                    setFloatingAgentStatus(j.reasons?.[0] || `${config.name}不可用`);
-                }
-                return false;
+            const available = await window.RequestAPI.checkAgentCapability(kind);
+            
+            if (!available && showError) {
+                setFloatingAgentStatus(`${name}不可用`);
             }
-            return true;
+            
+            return available;
         } catch (e) {
             return false;
         }
@@ -3074,15 +2971,12 @@ function init_app(){
                     if (isExpired()) return;
                     
                     try {
-                        const r = await fetch('/api/agent/flags', {
-                            method:'POST', 
-                            headers:{'Content-Type':'application/json'}, 
-                            body: JSON.stringify({
-                                lanlan_name: lanlan_config.lanlan_name, 
-                                flags: {agent_enabled:true, computer_use_enabled:false, mcp_enabled:false}
-                            })
+                        const success = await window.RequestAPI.setAgentFlags(lanlan_config.lanlan_name, {
+                            agent_enabled: true,
+                            computer_use_enabled: false,
+                            mcp_enabled: false
                         });
-                        if (!r.ok) throw new Error('main_server rejected');
+                        if (!success) throw new Error('main_server rejected');
                         
                         // 【竞态检查】API 请求完成后检查操作是否过期
                         if (isExpired()) {
@@ -3091,11 +2985,7 @@ function init_app(){
                         }
                         
                         // 启用 analyzer（确保 agent 模式开启时 analyze API 可用）
-                        await fetch('/api/agent/admin/control', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({action: 'enable_analyzer'})
-                        });
+                        await window.RequestAPI.controlAgent('enable_analyzer');
                         
                         // 【防竞态】API请求完成后确认操作序列号和总开关状态
                         if (isExpired() || !agentMasterCheckbox.checked) {
@@ -3136,11 +3026,7 @@ function init_app(){
                     
                     // 禁用 analyzer 并停止所有任务（disable_analyzer 会 cascade 调用 end_all）
                     try {
-                        await fetch('/api/agent/admin/control', {
-                            method: 'POST', 
-                            headers: {'Content-Type': 'application/json'}, 
-                            body: JSON.stringify({action: 'disable_analyzer'})
-                        });
+                        await window.RequestAPI.controlAgent('disable_analyzer');
                         
                         // 【竞态检查】如果操作已过期，跳过后续请求
                         if (isExpired()) {
@@ -3148,13 +3034,10 @@ function init_app(){
                             return;
                         }
                         
-                        await fetch('/api/agent/flags', {
-                            method: 'POST', 
-                            headers: {'Content-Type': 'application/json'}, 
-                            body: JSON.stringify({
-                                lanlan_name: lanlan_config.lanlan_name, 
-                                flags: {agent_enabled: false, computer_use_enabled: false, mcp_enabled: false}
-                            })
+                        await window.RequestAPI.setAgentFlags(lanlan_config.lanlan_name, {
+                            agent_enabled: false,
+                            computer_use_enabled: false,
+                            mcp_enabled: false
                         });
                     } catch(e) {
                         // 【竞态检查】错误处理前检查操作是否过期
@@ -3229,15 +3112,10 @@ function init_app(){
                     // 注：enabled=true时上面已检查；enabled=false时无await，入口检查已足够
                     
                     try {
-                        const r = await fetch('/api/agent/flags', {
-                            method:'POST', 
-                            headers:{'Content-Type':'application/json'}, 
-                            body: JSON.stringify({
-                                lanlan_name: lanlan_config.lanlan_name, 
-                                flags: {[flagKey]: enabled}
-                            })
+                        const success = await window.RequestAPI.setAgentFlags(lanlan_config.lanlan_name, {
+                            [flagKey]: enabled
                         });
-                        if (!r.ok) throw new Error('main_server rejected');
+                        if (!success) throw new Error('main_server rejected');
                         
                         // 【防竞态】请求完成后检查操作序列号和总开关状态
                         if (isExpired() || !agentMasterCheckbox?.checked) {
@@ -3293,10 +3171,8 @@ function init_app(){
         // 从后端同步 flags 状态到前端开关（完整同步，处理所有情况）
         async function syncFlagsFromBackend() {
             try {
-                const resp = await fetch('/api/agent/flags');
-                if (!resp.ok) return false;
-                const data = await resp.json();
-                if (!data.success) return false;
+                const data = await window.RequestAPI.getAgentFlags();
+                if (!data || !data.success) return false;
                 
                 const flags = data.agent_flags || {};
                 const analyzerEnabled = data.analyzer_enabled || false;
@@ -3489,17 +3365,11 @@ function init_app(){
         }
     };
     
-    // 获取并更新任务状态
+    // 获取并更新任务状态（使用 RequestAPI）
     async function fetchAndUpdateTaskStatus() {
         try {
-            const response = await fetch('/api/agent/task_status');
-            if (!response.ok) {
-                console.warn('[App] 获取任务状态失败:', response.status);
-                return;
-            }
-            
-            const data = await response.json();
-            if (data.success && window.live2dManager) {
+            const data = await window.RequestAPI.getAgentTaskStatus();
+            if (data && data.success && window.live2dManager) {
                 window.live2dManager.updateAgentTaskHUD(data);
             }
         } catch (error) {
@@ -3841,19 +3711,9 @@ function init_app(){
     
     async function triggerProactiveChat() {
         try {
-            const response = await fetch('/api/proactive_chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    lanlan_name: lanlan_config.lanlan_name
-                })
-            });
+            const result = await window.RequestAPI.triggerProactiveChat(lanlan_config.lanlan_name);
             
-            const result = await response.json();
-            
-            if (result.success) {
+            if (result && result.success) {
                 if (result.action === 'chat') {
                     console.log('主动搭话已发送:', result.message);
                     // 后端会直接通过session发送消息和TTS，前端无需处理显示
@@ -3861,7 +3721,7 @@ function init_app(){
                     console.log('AI选择不搭话');
                 }
             } else {
-                console.warn('主动搭话失败:', result.error);
+                console.warn('主动搭话失败:', result?.error);
             }
         } catch (error) {
             console.error('主动搭话触发失败:', error);
@@ -4024,7 +3884,12 @@ function init_app(){
         
         // 重新连接 WebSocket
         console.log('[猫娘切换] 重新连接 WebSocket，新猫娘:', newCatgirl);
-        connectWebSocket();
+        try {
+            await connectWebSocket();
+        } catch (error) {
+            console.warn('[猫娘切换] WebSocket 连接失败，但继续执行后续操作:', error);
+            // 允许继续执行，不中断 Live2D 模型加载
+        }
         
         // 更新页面标题
         document.title = `${newCatgirl} Terminal - Project N.E.K.O.`;
@@ -4032,8 +3897,8 @@ function init_app(){
         // 重新加载 Live2D 模型（强制重新加载，因为猫娘已切换）
         try {
             console.log('[猫娘切换] 开始重新加载 Live2D 模型...');
-            const modelResponse = await fetch(`/api/characters/current_live2d_model?catgirl_name=${encodeURIComponent(newCatgirl)}`);
-            const modelData = await modelResponse.json();
+            
+            const modelData = await window.RequestAPI.getCurrentLive2DModel(newCatgirl);
             
             console.log('[猫娘切换] Live2D 模型 API 响应:', modelData);
             
@@ -4061,8 +3926,16 @@ function init_app(){
                     // 重新加载模型（无论路径是否相同，因为猫娘已切换）
                     console.log('[猫娘切换] 重新加载 Live2D 模型，当前路径:', currentModelPath, '新路径:', newModelPath);
                     
-                    // 获取模型配置
-                    const modelConfigRes = await fetch(newModelPath);
+                    // 获取模型配置（使用 buildStaticUrl 统一处理静态资源路径）
+                    let resolvedModelPath = newModelPath;
+                    if (typeof window !== 'undefined' && typeof window.buildStaticUrl === 'function') {
+                        try {
+                            resolvedModelPath = window.buildStaticUrl(newModelPath);
+                        } catch (e) {
+                            console.warn('[猫娘切换] buildStaticUrl 失败，使用原始路径:', e);
+                        }
+                    }
+                    const modelConfigRes = await fetch(resolvedModelPath);
                     if (modelConfigRes.ok) {
                         const modelConfig = await modelConfigRes.json();
                         modelConfig.url = newModelPath;
@@ -4107,42 +3980,45 @@ function init_app(){
                     console.log('[猫娘切换] 尝试回退到默认模型 mao_pro');
                     
                     if (window.live2dManager && window.live2dManager.pixi_app) {
-                        // 查找mao_pro模型
-                        const modelsResponse = await fetch('/api/live2d/models');
-                        if (modelsResponse.ok) {
-                            const models = await modelsResponse.json();
-                            const maoProModel = models.find(m => m.name === 'mao_pro');
+                        // 查找mao_pro模型（使用 RequestAPI）
+                        const models = await window.RequestAPI.getLive2DModels();
+                        const maoProModel = models.find(m => m.name === 'mao_pro');
+                        
+                        if (maoProModel) {
+                            console.log('[猫娘切换] 找到默认模型 mao_pro，路径:', maoProModel.path);
                             
-                            if (maoProModel) {
-                                console.log('[猫娘切换] 找到默认模型 mao_pro，路径:', maoProModel.path);
-                                
-                                // 获取模型配置
-                                const modelConfigRes = await fetch(maoProModel.path);
-                                if (modelConfigRes.ok) {
-                                    const modelConfig = await modelConfigRes.json();
-                                    modelConfig.url = maoProModel.path;
-                                    
-                                    // 加载默认模型
-                                    await window.live2dManager.loadModel(modelConfig, {
-                                        isMobile: window.innerWidth <= 768
-                                    });
-                                    
-                                    // 更新全局引用
-                                    if (window.LanLan1) {
-                                        window.LanLan1.live2dModel = window.live2dManager.getCurrentModel();
-                                        window.LanLan1.currentModel = window.live2dManager.getCurrentModel();
-                                        window.LanLan1.emotionMapping = window.live2dManager.getEmotionMapping();
-                                    }
-                                    
-                                    console.log('[猫娘切换] 已成功回退到默认模型 mao_pro');
-                                } else {
-                                    console.error('[猫娘切换] 无法获取默认模型配置，状态:', modelConfigRes.status);
+                            // 获取模型配置（使用 buildStaticUrl 统一处理静态资源路径）
+                            let resolvedModelPath = maoProModel.path;
+                            if (typeof window !== 'undefined' && typeof window.buildStaticUrl === 'function') {
+                                try {
+                                    resolvedModelPath = window.buildStaticUrl(maoProModel.path);
+                                } catch (e) {
+                                    console.warn('[猫娘切换] buildStaticUrl 失败，使用原始路径:', e);
                                 }
+                            }
+                            const modelConfigRes = await fetch(resolvedModelPath);
+                            if (modelConfigRes.ok) {
+                                const modelConfig = await modelConfigRes.json();
+                                modelConfig.url = maoProModel.path;
+                                
+                                // 加载默认模型
+                                await window.live2dManager.loadModel(modelConfig, {
+                                    isMobile: window.innerWidth <= 768
+                                });
+                                
+                                // 更新全局引用
+                                if (window.LanLan1) {
+                                    window.LanLan1.live2dModel = window.live2dManager.getCurrentModel();
+                                    window.LanLan1.currentModel = window.live2dManager.getCurrentModel();
+                                    window.LanLan1.emotionMapping = window.live2dManager.getEmotionMapping();
+                                }
+                                
+                                console.log('[猫娘切换] 已成功回退到默认模型 mao_pro');
                             } else {
-                                console.error('[猫娘切换] 未找到默认模型 mao_pro');
+                                console.error('[猫娘切换] 无法获取默认模型配置，状态:', modelConfigRes.status);
                             }
                         } else {
-                            console.error('[猫娘切换] 无法获取模型列表');
+                            console.error('[猫娘切换] 未找到默认模型 mao_pro');
                         }
                     } else {
                         console.error('[猫娘切换] live2dManager 未初始化，无法加载默认模型');

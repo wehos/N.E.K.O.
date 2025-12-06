@@ -1,0 +1,43 @@
+{
+  "name": "react_web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "react-router build",
+    "build:react-bundles": "vite build --config vite.react-bundle.config.ts && vite build --config vite.react-dom-client-bundle.config.ts && npm run copy:react-bundles",
+    "build:component": "vite build --config vite.components.config.ts && npm run copy:component && npm run copy:status-toast && npm run copy:modal && npm run copy:button",
+    "build:global": "vite build --config vite.react_init.config.ts && vite build --config vite.global.config.ts && npm run copy:global",
+    "build:all": "npm run clean:bundles && npm run build:react-bundles && npm run build:global && npm run build:component",
+    "copy:react-bundles": "node scripts/copy-react-bundles.js",
+    "copy:component": "node scripts/copy-component.js",
+    "copy:status-toast": "node scripts/copy-status-toast.js",
+    "copy:modal": "node scripts/copy-modal.js",
+    "copy:button": "node scripts/copy-button.js",
+    "copy:global": "node scripts/copy-global.js",
+    "clean:bundles": "node scripts/clean-bundles.js",
+    "dev": "react-router dev",
+    "preview": "vite preview --outDir build/client",
+    "typecheck": "react-router typegen && tsc"
+  },
+  "dependencies": {
+    "@react-router/node": "^7.8.2",
+    "axios": "^1.13.2",
+    "axios-auth-refresh": "^3.3.6",
+    "isbot": "^5",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router": "^7.9.2"
+  },
+  "devDependencies": {
+    "@react-router/dev": "^7.9.2",
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/node": "^22",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7",
+    "vite-tsconfig-paths": "^5.1.4"
+  }
+}
