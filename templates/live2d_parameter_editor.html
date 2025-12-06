@@ -661,7 +661,14 @@
         sendMessageToMainPage('reload_model_parameters');
         // 延迟一点确保消息发送
         setTimeout(() => {
-            window.location.href = '/';
+            // 检查当前窗口是否是通过 window.open() 打开的
+            if (window.opener && !window.opener.closed) {
+                // 如果是通过 window.open() 打开的，关闭当前窗口
+                window.close();
+            } else {
+                // 否则，使用常规的页面跳转
+                window.location.href = '/';
+            }
         }, 100);
     });
 
@@ -772,11 +779,38 @@
             const modelConfig = await modelConfigRes.json();
             modelConfig.url = modelJsonUrl;
             
+            // 加载用户偏好设置
+            const preferences = await window.live2dManager.loadUserPreferences();
+            let modelPreferences = null;
+            if (preferences && preferences.length > 0) {
+                // 首先尝试精确匹配
+                modelPreferences = preferences.find(p => p && p.model_path === modelJsonUrl);
+                
+                // 如果精确匹配失败，尝试文件名匹配
+                if (!modelPreferences) {
+                    const targetFileName = modelJsonUrl.split('/').pop() || '';
+                    modelPreferences = preferences.find(p => {
+                        if (!p || !p.model_path) return false;
+                        const prefFileName = p.model_path.split('/').pop() || '';
+                        return targetFileName && prefFileName && targetFileName === prefFileName;
+                    });
+                }
+                
+                // 如果还是没找到，尝试模型名称匹配
+                if (!modelPreferences) {
+                    modelPreferences = preferences.find(p => {
+                        if (!p || !p.model_path) return false;
+                        return p.model_path.includes(modelName);
+                    });
+                }
+            }
+            
             // 加载模型（会自动从模型目录加载parameters.json）
             await window.live2dManager.loadModel(modelConfig, {
                 loadEmotionMapping: false,
                 dragEnabled: true,
-                wheelEnabled: true
+                wheelEnabled: true,
+                preferences: modelPreferences
             });
             
             live2dModel = window.live2dManager.getCurrentModel();
