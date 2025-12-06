@@ -101,9 +101,10 @@ Live2DManager.prototype._createToggleItem = function (toggle, popup) {
         padding: '6px 8px',
         cursor: 'pointer',
         borderRadius: '6px',
-        transition: 'background 0.2s ease',
+        transition: 'background 0.2s ease, opacity 0.2s ease',  // 添加opacity过渡
         fontSize: '13px',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        opacity: toggle.initialDisabled ? '0.5' : '1'  // 【状态机】初始禁用时显示半透明
     });
 
     const checkbox = document.createElement('input');
@@ -114,10 +115,11 @@ Live2DManager.prototype._createToggleItem = function (toggle, popup) {
         display: 'none'
     });
 
-    // 【修复】如果配置了初始禁用状态，则禁用 checkbox
+    // 【状态机严格控制】默认禁用所有按钮，使用配置的title
     if (toggle.initialDisabled) {
         checkbox.disabled = true;
-        checkbox.title = window.t ? window.t('settings.toggles.checking') : '查询中...';
+        checkbox.title = toggle.initialTitle || (window.t ? window.t('settings.toggles.checking') : '查询中...');
+        toggleItem.style.cursor = 'default';  // 禁用时显示默认光标
     }
 
     // 创建自定义圆形指示器

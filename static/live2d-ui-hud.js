@@ -18,14 +18,34 @@ Live2DManager.prototype._createAgentPopupContent = function (popup) {
         minHeight: '20px',
         textAlign: 'center'
     });
-    statusDiv.textContent = ''; // 初始为空
+    // 【状态机】初始显示"查询中..."，由状态机更新
+    statusDiv.textContent = window.t ? window.t('settings.toggles.checking') : '查询中...';
     popup.appendChild(statusDiv);
 
-    // 【修复】所有 agent 开关初始状态为禁用，等待查询结果后由 app.js 启用
+    // 【状态机严格控制】所有 agent 开关默认禁用，title显示查询中
+    // 只有状态机检测到可用性后才逐个恢复交互
     const agentToggles = [
-        { id: 'agent-master', label: window.t ? window.t('settings.toggles.agentMaster') : 'Agent总开关', labelKey: 'settings.toggles.agentMaster', initialDisabled: true },
-        { id: 'agent-keyboard', label: window.t ? window.t('settings.toggles.keyboardControl') : '键鼠控制', labelKey: 'settings.toggles.keyboardControl', initialDisabled: true },
-        { id: 'agent-mcp', label: window.t ? window.t('settings.toggles.mcpTools') : 'MCP工具', labelKey: 'settings.toggles.mcpTools', initialDisabled: true }
+        { 
+            id: 'agent-master', 
+            label: window.t ? window.t('settings.toggles.agentMaster') : 'Agent总开关', 
+            labelKey: 'settings.toggles.agentMaster', 
+            initialDisabled: true,
+            initialTitle: window.t ? window.t('settings.toggles.checking') : '查询中...'
+        },
+        { 
+            id: 'agent-keyboard', 
+            label: window.t ? window.t('settings.toggles.keyboardControl') : '键鼠控制', 
+            labelKey: 'settings.toggles.keyboardControl', 
+            initialDisabled: true,
+            initialTitle: window.t ? window.t('settings.toggles.checking') : '查询中...'
+        },
+        { 
+            id: 'agent-mcp', 
+            label: window.t ? window.t('settings.toggles.mcpTools') : 'MCP工具', 
+            labelKey: 'settings.toggles.mcpTools', 
+            initialDisabled: true,
+            initialTitle: window.t ? window.t('settings.toggles.checking') : '查询中...'
+        }
     ];
 
     agentToggles.forEach(toggle => {
