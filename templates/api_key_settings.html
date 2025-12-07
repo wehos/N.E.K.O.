@@ -1239,23 +1239,25 @@ document.getElementById('api-key-form').addEventListener('submit', async functio
     const coreApiSelect = document.getElementById('coreApiSelect');
     const assistApiSelect = document.getElementById('assistApiSelect');
     
+    // 获取自定义API启用状态（用于推断逻辑，优先判断非自定义模式）
+    const enableCustomApi = document.getElementById('enableCustomApi') ? document.getElementById('enableCustomApi').checked : false;
+
     // 优先从选择器获取值，如果选择器被禁用或值为空，则从当前显示状态推断
     let coreApi = coreApiSelect ? coreApiSelect.value : '';
     let assistApi = assistApiSelect ? assistApiSelect.value : '';
     
     // 如果核心API选择器被禁用，检查是否是因为免费版本
     if (coreApiSelect && coreApiSelect.disabled && coreApi === '') {
-        // 检查当前显示状态，如果是免费版本，确保coreApi设置为'free'
-        const freeVersionHint = document.getElementById('freeVersionHint');
-        if (freeVersionHint && freeVersionHint.style.display !== 'none') {
+        // 仅在非自定义API模式下，根据 select 的实际值判断是否为免费版
+        if (!enableCustomApi && coreApiSelect.value === 'free') {
             coreApi = 'free';
         }
     }
     
     // 如果辅助API选择器被禁用，检查是否是因为免费版本
     if (assistApiSelect && assistApiSelect.disabled && assistApi === '') {
-        // 在免费版本中，辅助API应该强制为'free'
-        if (coreApi === 'free') {
+        // 仅在非自定义API模式下，如果核心 API 已确定为 free，则辅助 API 也强制为 'free'
+        if (!enableCustomApi && coreApi === 'free') {
             assistApi = 'free';
         }
     }
@@ -1267,9 +1269,6 @@ document.getElementById('api-key-form').addEventListener('submit', async functio
     const assistApiKeyGlm = document.getElementById('assistApiKeyInputGlm') ? document.getElementById('assistApiKeyInputGlm').value.trim() : '';
     const assistApiKeyStep = document.getElementById('assistApiKeyInputStep') ? document.getElementById('assistApiKeyInputStep').value.trim() : '';
     const assistApiKeySilicon = document.getElementById('assistApiKeyInputSilicon') ? document.getElementById('assistApiKeyInputSilicon').value.trim() : '';
-    
-    // 获取自定义API启用状态
-    const enableCustomApi = document.getElementById('enableCustomApi') ? document.getElementById('enableCustomApi').checked : false;
     
     // 获取用户自定义API配置
     const summaryModelProvider = document.getElementById('summaryModelProvider') ? document.getElementById('summaryModelProvider').value.trim() : '';
