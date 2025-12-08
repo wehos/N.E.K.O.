@@ -11,6 +11,7 @@ import logging
 import sys
 import time
 import uuid
+import shlex
 from typing import Optional, Tuple
 import asyncio
 from pathlib import Path
@@ -154,10 +155,11 @@ $bitmap.Dispose()
                     logger.warning(f"清理临时PowerShell脚本失败: {cleanup_error}")
                 
         except Exception as e:
-            logger.error(f"Windows截图异常: {e}")
-            # 确保异常时也清理临时文件
+            logger.exception(f"Windows截图异常: {e}")
+            # 确保异常时也清理临时文件，检查变量是否已定义且文件存在
             try:
-                os.unlink(temp_script_path)
+                if 'temp_script_path' in locals() and os.path.exists(temp_script_path):
+                    os.unlink(temp_script_path)
             except Exception as cleanup_error:
                 logger.warning(f"清理临时PowerShell脚本失败: {cleanup_error}")
             return None
@@ -170,9 +172,9 @@ $bitmap.Dispose()
             unique_id = uuid.uuid4().hex[:8]
             screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
             
-            # 使用macOS的screencapture命令
+            # 使用macOS的screencapture命令，使用shlex.quote()防止路径注入
             process = await asyncio.create_subprocess_shell(
-                f"screencapture -x {screenshot_path}",
+                f"screencapture -x {shlex.quote(screenshot_path)}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -198,11 +200,11 @@ $bitmap.Dispose()
             unique_id = uuid.uuid4().hex[:8]
             screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
             
-            # 尝试使用不同的Linux截图工具
+            # 尝试使用不同的Linux截图工具，使用shlex.quote()防止路径注入
             tools = [
-                ("gnome-screenshot", f"gnome-screenshot -f {screenshot_path}"),
-                ("scrot", f"scrot {screenshot_path}"),
-                ("import", f"import -window root {screenshot_path}"),  # ImageMagick
+                ("gnome-screenshot", f"gnome-screenshot -f {shlex.quote(screenshot_path)}"),
+                ("scrot", f"scrot {shlex.quote(screenshot_path)}"),
+                ("import", f"import -window root {shlex.quote(screenshot_path)}"),  # ImageMagick
             ]
             
             for tool_name, command in tools:
