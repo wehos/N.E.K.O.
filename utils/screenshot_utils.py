@@ -229,7 +229,7 @@ $bitmap.Dispose()
                 return None
                 
         except Exception as e:
-            logger.error(f"截图分析异常: {e}")
+            logger.exception(f"截图分析异常: {e}")
             return None
     
 
@@ -352,13 +352,12 @@ $bitmap.Dispose()
                         logger.info("AI图像分析成功")
                         # 清理可能的重复内容
                         cleaned_description = description.strip()
-                        # 移除可能的开场白和总结文本
-                        if cleaned_description.startswith("这张截图显示"):
-                            cleaned_description = cleaned_description[5:].strip()
-                        if cleaned_description.startswith("截图显示"):
-                            cleaned_description = cleaned_description[3:].strip()
-                        if cleaned_description.startswith("图片显示"):
-                            cleaned_description = cleaned_description[3:].strip()
+                        # 移除可能的开场白和总结文本，使用循环处理多个前缀
+                        prefixes = ["这张截图显示", "截图显示", "图片显示"]
+                        for prefix in prefixes:
+                            if cleaned_description.startswith(prefix):
+                                cleaned_description = cleaned_description[len(prefix):].strip()
+                                break
                         
                         logger.info(f"清理后的描述: {cleaned_description[:100]}...")
                         return cleaned_description
@@ -372,7 +371,7 @@ $bitmap.Dispose()
                     return None
                     
             except Exception as api_error:
-                logger.error(f"AI API调用失败: {api_error}")
+                logger.exception(f"AI API调用失败: {api_error}")
                 return None
                 
         except ImportError:

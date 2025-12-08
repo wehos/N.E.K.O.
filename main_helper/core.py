@@ -1019,7 +1019,7 @@ class LLMSessionManager:
 
             # 2. Start temporary listener for PENDING session's *second* ignored response
             if self.pending_session_final_prime_complete_event:
-                self.pending_session_final_prime_complete_event.is_set()
+                self.pending_session_final_prime_complete_event.set()
 
             # --- PERFORM ACTUAL HOT SWAP ---
             logger.info("Final Swap Sequence: Starting actual session swap...")
