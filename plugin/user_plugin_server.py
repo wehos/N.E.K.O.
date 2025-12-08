@@ -189,8 +189,9 @@ def _plugin_process_runner(plugin_id: str, entry_point: str, config_path: Path,
                     else:
                         fn()
                 except Exception as e:
-                    logger.exception(f"Timer '{fn_name}' failed: {e}")
-                time.sleep(interval_seconds)
+                    logger.exception("Timer '%s' failed", fn_name)
+                # 用 wait 方便将来优雅停止喵
+                stop_event.wait(interval_seconds)
 
         timer_events = events_by_type.get("timer", {})
         for eid, fn in timer_events.items():
@@ -203,9 +204,12 @@ def _plugin_process_runner(plugin_id: str, entry_point: str, config_path: Path,
             if mode == "interval":
                 seconds = getattr(meta, "extra", {}).get("seconds", 0)
                 if seconds > 0:
+                    stop_event = threading.Event()
+                    # 这里如果需要的话也可以记到 _timer_stop_flags 里备用喵：
+                    # _timer_stop_flags[f"{plugin_id}.{eid}"] = stop_event
                     t = threading.Thread(
                         target=_run_timer_interval,
-                        args=(fn, seconds, eid),
+                        args=(fn, seconds, eid, stop_event),
                         daemon=True,
                     )
                     t.start()
@@ -293,16 +297,8 @@ class PluginProcessHost:
         except Exception:
             logger.exception(f"Error shutting down plugin {self.plugin_id}")
 
-    async def trigger(self, entry_id: str, args: dict, timeout=10.0):
+    async def trigger(self, entry_id: str, args: dict, timeout: float = 10.0):
         req_id = str(uuid.uuid4())
-        # 先检查缓存里有没有
-        if req_id in self._pending_results:
-            res = self._pending_results.pop(req_id)
-            if res['success']:
-                return res['data']
-            else:
-                raise Exception(res['error'])
-
         self.cmd_queue.put({
             "type": "TRIGGER", "req_id": req_id, 
             "entry_id": entry_id, "args": args
@@ -313,21 +309,28 @@ class PluginProcessHost:
         start = time.time()
         
         while time.time() - start < timeout:
+            # 先看缓存：有没有别的协程已经帮我们把这个 req_id 的结果塞进来了喵
+            cached = self._pending_results.pop(req_id, None)
+            if cached is not None:
+                if cached["success"]:
+                    return cached["data"]
+                raise Exception(cached["error"])
+
             try:
-                # 尝试非阻塞读
+                # 再尝试从子进程队列捞一条新结果喵
                 res = await loop.run_in_executor(None, self._get_result_safe)
-                if res:
-                    if res['req_id'] == req_id:
-                        if res['success']: 
-                            return res['data']
-                        else: 
-                            raise Exception(res['error'])
-                    else:
-                        # 缓存起来给别的请求用
-                        self._pending_results[res['req_id']] = res
+                if not res:
+                    continue
+
+                if res["req_id"] == req_id:
+                    if res["success"]:
+                        return res["data"]
+                    raise Exception(res["error"])
+
+                # 不是当前请求的，就缓存起来给对应的 trigger 用
+                self._pending_results[res["req_id"]] = res
             except Empty:
                 await asyncio.sleep(0.05)
-        
         raise TimeoutError("Plugin execution timed out")
 
     def _get_result_safe(self):
