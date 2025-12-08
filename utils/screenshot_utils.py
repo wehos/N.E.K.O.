@@ -9,6 +9,8 @@ import os
 import base64
 import logging
 import sys
+import time
+import uuid
 from typing import Optional, Tuple
 import asyncio
 from pathlib import Path
@@ -89,7 +91,10 @@ class ScreenshotUtils:
             try:
                 from PIL import ImageGrab
                 screenshot = ImageGrab.grab()
-                screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{int(asyncio.get_event_loop().time())}.png")
+                # 使用时间戳和UUID生成唯一文件名
+                timestamp = int(time.time())
+                unique_id = uuid.uuid4().hex[:8]
+                screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
                 screenshot.save(screenshot_path, 'PNG')
                 logger.info(f"Windows截图成功: {screenshot_path}")
                 return screenshot_path
@@ -98,10 +103,14 @@ class ScreenshotUtils:
             
             # 使用Windows系统命令（需要安装nircmd或使用其他工具）
             # 这里使用简单的PowerShell命令
-            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{int(asyncio.get_event_loop().time())}.png")
+            # 使用时间戳和UUID生成唯一文件名
+            timestamp = int(time.time())
+            unique_id = uuid.uuid4().hex[:8]
+            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
             
-            # 使用PowerShell的Add-Type命令进行截图
-            powershell_script = f"""
+            # 使用PowerShell的Add-Type命令进行截图，通过参数传递路径避免注入
+            powershell_script = """
+param($Path)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -110,34 +119,56 @@ $bounds = $screen.Bounds
 $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bitmap.Save('{screenshot_path}', [System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose()
 $bitmap.Dispose()
 """
             
-            process = await asyncio.create_subprocess_shell(
-                f"powershell -Command \"{powershell_script}\"",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            # 创建临时PowerShell脚本文件
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.ps1', delete=False) as temp_script:
+                temp_script.write(powershell_script)
+                temp_script_path = temp_script.name
             
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0 and os.path.exists(screenshot_path):
-                logger.info(f"Windows PowerShell截图成功: {screenshot_path}")
-                return screenshot_path
-            else:
-                logger.error(f"Windows截图失败: {stderr.decode() if stderr else '未知错误'}")
-                return None
+            try:
+                # 使用subprocess_exec避免shell注入，直接传递参数
+                process = await asyncio.create_subprocess_exec(
+                    'powershell.exe', '-File', temp_script_path, '-Path', screenshot_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode == 0 and os.path.exists(screenshot_path):
+                    logger.info(f"Windows PowerShell截图成功: {screenshot_path}")
+                    return screenshot_path
+                else:
+                    logger.error(f"Windows截图失败: {stderr.decode() if stderr else '未知错误'}")
+                    return None
+                    
+            finally:
+                # 确保临时文件被清理
+                try:
+                    os.unlink(temp_script_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"清理临时PowerShell脚本失败: {cleanup_error}")
                 
         except Exception as e:
             logger.error(f"Windows截图异常: {e}")
+            # 确保异常时也清理临时文件
+            try:
+                os.unlink(temp_script_path)
+            except Exception as cleanup_error:
+                logger.warning(f"清理临时PowerShell脚本失败: {cleanup_error}")
             return None
     
     async def _capture_macos(self) -> Optional[str]:
         """macOS系统截图"""
         try:
-            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{int(asyncio.get_event_loop().time())}.png")
+            # 使用时间戳和UUID生成唯一文件名
+            timestamp = int(time.time())
+            unique_id = uuid.uuid4().hex[:8]
+            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
             
             # 使用macOS的screencapture命令
             process = await asyncio.create_subprocess_shell(
@@ -162,7 +193,10 @@ $bitmap.Dispose()
     async def _capture_linux(self) -> Optional[str]:
         """Linux系统截图"""
         try:
-            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{int(asyncio.get_event_loop().time())}.png")
+            # 使用时间戳和UUID生成唯一文件名
+            timestamp = int(time.time())
+            unique_id = uuid.uuid4().hex[:8]
+            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}_{unique_id}.png")
             
             # 尝试使用不同的Linux截图工具
             tools = [
