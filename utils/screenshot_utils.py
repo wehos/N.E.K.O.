@@ -41,8 +41,8 @@ class ScreenshotUtils:
                 logger.info("AI截图分析失败，放弃本次主动搭话")
                 return None
                 
-        except Exception as e:
-            logger.exception(f"截图分析异常: {e}")
+        except Exception:
+            logger.exception("截图分析异常:")
             return None
     
     async def _analyze_screenshot_ai(self, screenshot_path: str) -> Optional[str]:
@@ -188,6 +188,6 @@ class ScreenshotUtils:
         except ImportError:
             logger.warning("OpenAI库不可用，无法进行AI分析")
             return None
-        except Exception as e:
-            logger.error(f"AI截图分析失败: {e}")
+        except Exception:
+            logger.exception("AI截图分析失败")
             return None
