@@ -181,8 +181,8 @@ class ScreenshotUtils:
                         logger.warning(f"响应结构: choices={len(response.choices) if response.choices else 0}")
                     return None
                     
-            except Exception as api_error:
-                logger.exception("AI API调用失败:")
+            except Exception:
+                logger.exception("AI API调用失败")
                 return None
                 
         except ImportError:
