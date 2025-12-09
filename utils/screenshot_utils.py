@@ -182,7 +182,7 @@ class ScreenshotUtils:
                     return None
                     
             except Exception as api_error:
-                logger.exception(f"AI API调用失败: {api_error}")
+                logger.exception("AI API调用失败:")
                 return None
                 
         except ImportError:
