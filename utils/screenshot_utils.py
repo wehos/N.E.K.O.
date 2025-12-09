@@ -83,31 +83,25 @@ class ScreenshotUtils:
                     logger.info("自定义API视觉模型配置不完整，跳过AI分析")
                     return None
             else:
-                # 未开启自定义API：使用辅助API厂商的默认配置
-                if assist_api == 'qwen':
-                    vision_api_key = core_config.get('ASSIST_API_KEY_QWEN') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                    vision_model = "qwen3-vl-plus-2025-09-23"
-                elif assist_api == 'openai':
-                    vision_api_key = core_config.get('ASSIST_API_KEY_OPENAI') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://api.openai.com/v1"
-                    vision_model = "gpt-4o"
-                elif assist_api == 'glm':
-                    vision_api_key = core_config.get('ASSIST_API_KEY_GLM') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://open.bigmodel.cn/api/paas/v4"
-                    vision_model = "glm-4v-plus-0111"
-                elif assist_api == 'step':
-                    vision_api_key = core_config.get('ASSIST_API_KEY_STEP') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://api.stepfun.com/v1"
-                    vision_model = "step-1o-turbo-vision"
-                elif assist_api == 'silicon':
-                    vision_api_key = core_config.get('ASSIST_API_KEY_SILICON') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://api.siliconflow.cn/v1"
-                    vision_model = "Qwen/Qwen3-VL-235B-A22B-Instruct"
-                else:  # 默认使用qwen
-                    vision_api_key = core_config.get('ASSIST_API_KEY_QWEN') or core_config.get('CORE_API_KEY')
-                    vision_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                    vision_model = "qwen3-vl-plus-2025-09-23"
+                # 未开启自定义API：不使用自定义API配置，直接使用辅助API的默认配置
+                logger.info("自定义API未启用，使用辅助API默认视觉模型配置")
+                
+                # 获取辅助API对应的API密钥字段名
+                from utils.api_config_loader import get_assist_api_key_fields
+                assist_api_key_fields = get_assist_api_key_fields()
+                key_field = assist_api_key_fields.get(assist_api, 'ASSIST_API_KEY_QWEN')
+                vision_api_key = core_config.get(key_field) or core_config.get('CORE_API_KEY')
+                
+                # 使用辅助API的默认视觉模型配置
+                vision_base_url = core_config.get('OPENROUTER_URL')
+                
+                # 直接从辅助API配置中获取对应的视觉模型
+                from utils.api_config_loader import get_assist_api_profiles
+                assist_api_profiles = get_assist_api_profiles()
+                assist_profile = assist_api_profiles.get(assist_api, assist_api_profiles.get('qwen'))
+                vision_model = assist_profile.get('VISION_MODEL', 'qwen3-vl-plus-2025-09-23')
+                
+                logger.info(f"辅助API配置 - 密钥字段: {key_field}, 模型: {vision_model}")
             
             logger.info(f"最终配置 - 密钥配置: {bool(vision_api_key)}, 模型: {vision_model}")
             
