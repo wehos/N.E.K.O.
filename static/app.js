@@ -1439,8 +1439,8 @@ function init_app(){
             return;
         }
         
-        // 用户主动发送文本时，停止主动搭话定时器
-        stopProactiveChatSchedule();
+        // 用户主动发送文本时，重置主动搭话计时器
+        resetProactiveChatBackoff();
         
         // 如果还没有启动session，先启动
         if (!isTextSessionActive) {
