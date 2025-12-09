@@ -4438,13 +4438,22 @@ function init_app(){
     
     async function triggerProactiveChat() {
         try {
+            // 首先在前端截图
+            const screenshotDataUrl = await captureProactiveChatScreenshot();
+            
+            if (!screenshotDataUrl) {
+                console.log('主动搭话截图失败，跳过本次搭话');
+                return;
+            }
+            
             const response = await fetch('/api/proactive_chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    lanlan_name: lanlan_config.lanlan_name
+                    lanlan_name: lanlan_config.lanlan_name,
+                    screenshot_data: screenshotDataUrl
                 })
             });
             
@@ -4476,6 +4485,52 @@ function init_app(){
         if (proactiveChatTimer) {
             clearTimeout(proactiveChatTimer);
             proactiveChatTimer = null;
+        }
+    }
+    
+    // 主动搭话截图函数
+    async function captureProactiveChatScreenshot() {
+        try {
+            // 使用屏幕共享API进行截图
+            const captureStream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    cursor: 'always',
+                },
+                audio: false,
+            });
+            
+            // 创建video元素来加载流
+            const video = document.createElement('video');
+            video.srcObject = captureStream;
+            video.autoplay = true;
+            video.muted = true;
+            
+            // 等待视频加载完成
+            await video.play();
+            
+            // 创建canvas来捕获帧
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // 设置canvas尺寸与视频相同
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // 绘制视频帧到canvas
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // 转换为DataURL
+            const dataUrl = canvas.toDataURL('image/png');
+            
+            // 停止捕获流
+            captureStream.getTracks().forEach(track => track.stop());
+            
+            console.log('主动搭话截图成功');
+            return dataUrl;
+            
+        } catch (err) {
+            console.error('主动搭话截图失败:', err);
+            return null;
         }
     }
     

@@ -40,6 +40,7 @@ import webbrowser
 import io
 import threading
 import time
+from typing import Optional
 from urllib.parse import quote, unquote
 from steamworks.exceptions import SteamNotLoadedException
 from steamworks.enums import EWorkshopFileType, EItemUpdateStatus
@@ -47,7 +48,7 @@ import base64
 import tempfile
 import platform
 import subprocess
-from utils.screenshot_utils import get_latest_screenshot_content
+from utils.screenshot_utils import ScreenshotUtils
 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Body
@@ -410,6 +411,41 @@ if _IS_MAIN_PROCESS:
     if os.path.exists(user_mod_path) and os.path.isdir(user_mod_path):
         app.mount("/user_mods", CustomStaticFiles(directory=user_mod_path), name="user_mods")
         logger.info(f"已挂载用户mod路径: {user_mod_path}")
+async def analyze_screenshot_from_data_url(data_url: str) -> Optional[str]:
+    """分析前端发送的截图DataURL"""
+    try:
+        # DataURL格式: data:image/png;base64,<base64数据>
+        if not data_url.startswith('data:image/'):
+            logger.error(f"无效的DataURL格式: {data_url[:100]}...")
+            return None
+        
+        # 提取base64数据
+        base64_data = data_url.split(',')[1]
+        
+        # 解码base64数据
+        image_data = base64.b64decode(base64_data)
+        
+        # 创建临时文件保存截图
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            temp_file.write(image_data)
+            temp_file_path = temp_file.name
+        
+        try:
+            # 使用截图工具分析图片
+            screenshot_utils = ScreenshotUtils()
+            description = await screenshot_utils.get_screenshot_description(temp_file_path)
+            return description
+        finally:
+            # 清理临时文件
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e:
+                logger.warning(f"清理临时截图文件失败: {e}")
+                
+    except Exception as e:
+        logger.error(f"分析截图DataURL失败: {e}")
+        return None
+
 # 使用 FastAPI 的 app.state 来管理启动配置
 def get_start_config():
     """从 app.state 获取启动配置"""
@@ -1167,25 +1203,46 @@ async def proactive_chat(request: Request):
         
         logger.info(f"[{lanlan_name}] 开始主动搭话流程...")
         
-        # 1. 概率选择：50%使用图片，50%使用热门内容
-        use_screenshot = random.random() < 0.5
-        logger.info(f"[{lanlan_name}] 概率选择结果: 使用截图={use_screenshot}")
+        # 1. 检查前端是否发送了截图数据
+        screenshot_data = data.get('screenshot_data')
+        has_screenshot = bool(screenshot_data)
         
-        if use_screenshot:
-            logger.info(f"[{lanlan_name}] 选择使用图片内容进行主动搭话")
-            # 图片主动对话
-            try:
-                # 获取最新的屏幕截图内容
-                logger.info(f"[{lanlan_name}] 开始调用截图分析...")
-                screenshot_content = await get_latest_screenshot_content()
-                if not screenshot_content:
-                    logger.warning(f"[{lanlan_name}] 无法获取屏幕截图内容，回退到热门内容")
-                    use_screenshot = False
-                else:
-                    logger.info(f"[{lanlan_name}] 成功获取屏幕截图内容")
-            except Exception as e:
-                logger.error(f"[{lanlan_name}] 获取屏幕截图失败: {e}")
+        # 设置概率：截图50%，热门内容50%
+        use_screenshot = False
+        
+        if has_screenshot:
+            # 50%概率使用截图，50%概率使用热门内容
+            if random.random() < 0.5:
+                logger.info(f"[{lanlan_name}] 随机选择使用截图进行主动搭话")
+                
+                # 处理前端发送的截图数据
+                try:
+                    # 将DataURL转换为base64数据并分析
+                    screenshot_content = await analyze_screenshot_from_data_url(screenshot_data)
+                    if not screenshot_content:
+                        logger.info(f"[{lanlan_name}] 截图分析失败，结束本次主动搭话")
+                        return JSONResponse({
+                            "success": True,
+                            "action": "pass",
+                            "message": "截图分析失败，AI选择不搭话"
+                        })
+                    else:
+                        logger.info(f"[{lanlan_name}] 成功分析截图内容")
+                        use_screenshot = True
+                except Exception as e:
+                    logger.error(f"[{lanlan_name}] 处理截图数据失败: {e}")
+                    return JSONResponse({
+                        "success": False,
+                        "error": "截图处理失败",
+                        "detail": str(e)
+                    }, status_code=500)
+            else:
+                logger.info(f"[{lanlan_name}] 随机选择使用热门内容进行主动搭话")
                 use_screenshot = False
+        else:
+            # 没有截图数据，只能使用热门内容
+            logger.info(f"[{lanlan_name}] 没有截图数据，使用热门内容进行主动搭话")
+            use_screenshot = False
         
         if not use_screenshot:
             logger.info(f"[{lanlan_name}] 选择使用热门内容进行主动搭话")
@@ -1194,11 +1251,12 @@ async def proactive_chat(request: Request):
                 trending_content = await fetch_trending_content(bilibili_limit=10, weibo_limit=10)
                 
                 if not trending_content['success']:
+                    logger.info(f"[{lanlan_name}] 热门内容获取失败，结束本次主动搭话")
                     return JSONResponse({
-                        "success": False,
-                        "error": "无法获取热门内容",
-                        "detail": trending_content.get('error', '未知错误')
-                    }, status_code=500)
+                        "success": True,
+                        "action": "pass",
+                        "message": "热门内容获取失败，AI选择不搭话"
+                    })
                 
                 formatted_content = format_trending_content(trending_content)
                 logger.info(f"[{lanlan_name}] 成功获取热门内容")
