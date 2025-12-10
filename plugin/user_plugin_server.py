@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 
 from plugin.server_base import state
+from plugin.models import PluginTriggerRequest, PluginTriggerResponse
 from plugin.registry import (
     load_plugins_from_toml,
     get_plugins as registry_get_plugins,
@@ -161,10 +162,20 @@ async def _startup_load_plugins():
             logger.info("startup-diagnostics: no plugin instances loaded")
     except Exception:
         logger.exception("startup-diagnostics: failed to enumerate plugin instances")
-        
-@app.on_event("startup")
-async def start_status_monitor():
-    asyncio.create_task(status_manager.status_consumer())
+    
+    # 启动所有插件的通信资源管理器
+    for plugin_id, host in state.plugin_hosts.items():
+        try:
+            await host.start()
+            logger.debug(f"Started communication resources for plugin {plugin_id}")
+        except Exception as e:
+            logger.exception(f"Failed to start communication resources for plugin {plugin_id}: {e}")
+    
+    # 启动状态消费任务
+    await status_manager.start_status_consumer(
+        plugin_hosts_getter=lambda: state.plugin_hosts
+    )
+    logger.info("Status consumer started")
     
 # New endpoint: /plugin/trigger
 # This endpoint is intended to be called by TaskExecutor (or other components) when a plugin should be triggered.
@@ -182,41 +193,36 @@ async def start_status_monitor():
 @app.on_event("shutdown")
 async def shutdown_plugins():
     """在应用关闭时，优雅地关闭所有插件"""
-    for plugin_host in state.plugin_hosts.values():
-        plugin_host.shutdown(timeout=5.0)
+    logger.info("Shutting down all plugins...")
+    
+    # 关闭状态消费任务
+    try:
+        await status_manager.shutdown_status_consumer(timeout=5.0)
+    except Exception as e:
+        logger.exception("Error shutting down status consumer: {e}")
+    
+    # 关闭所有插件的资源
+    shutdown_tasks = []
+    for plugin_id, host in state.plugin_hosts.items():
+        shutdown_tasks.append(host.shutdown(timeout=5.0))
+    
+    # 并发关闭所有插件
+    if shutdown_tasks:
+        await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+    
     logger.info("All plugins have been gracefully shutdown.")
 
-@app.post("/plugin/trigger")
-async def plugin_trigger(payload: Dict[str, Any], request: Request):
+@app.post("/plugin/trigger", response_model=PluginTriggerResponse)
+async def plugin_trigger(payload: PluginTriggerRequest, request: Request):
     """
-    触发指定插件的指定 entry（前端约定只会传以下结构）：
-    {
-        "task_id": "xxx",          # 可选
-        "plugin_id": "tkWindow",   # 必填
-        "entry_id": "open",        # 必填：要调用的插件 entry id
-        "args": { ... }            # 可选：entry 需要的参数
-    }
+    触发指定插件的指定 entry
     """
     try:
-        # --- 1. 基础校验 (保持不变) ---
         client_host = request.client.host if request.client else None
-
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="JSON body must be an object")
-
-        plugin_id = payload.get("plugin_id")
-        if not plugin_id or not isinstance(plugin_id, str):
-            raise HTTPException(status_code=400, detail="plugin_id (string) required")
-
-        entry_id = payload.get("entry_id")
-        if not entry_id or not isinstance(entry_id, str):
-            raise HTTPException(status_code=400, detail="entry_id (string) required")
-
-        args = payload.get("args") or {}
-        if not isinstance(args, dict):
-            raise HTTPException(status_code=400, detail="args must be an object")
-
-        task_id = payload.get("task_id")
+        plugin_id = payload.plugin_id
+        entry_id = payload.entry_id
+        args = payload.args
+        task_id = payload.task_id
 
         logger.info(
             "[plugin_trigger] plugin_id=%s entry_id=%s task_id=%s args=%s",
@@ -252,6 +258,14 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
         if not host:
             raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' is not running/loaded")
 
+        # 检查进程健康状态
+        health = host.health_check()
+        if not health.alive:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Plugin '{plugin_id}' process is not alive (status: {health.status})"
+            )
+
         plugin_response: Any = None
         plugin_error: Optional[Dict[str, Any]] = None
 
@@ -271,19 +285,18 @@ async def plugin_trigger(payload: Dict[str, Any], request: Request):
             )
             plugin_error = {"error": str(e)}
 
-        # --- 4. 构造响应 (保持原有格式兼容) ---
-        resp: Dict[str, Any] = {
-            "success": plugin_error is None,
-            "plugin_id": plugin_id,
-            "executed_entry": entry_id,
-            "args": args,
-            "plugin_response": plugin_response,
-            "received_at": event["received_at"],
-        }
-        if plugin_error:
-            resp["plugin_forward_error"] = plugin_error
+        # --- 4. 构造响应 ---
+        resp = PluginTriggerResponse(
+            success=plugin_error is None,
+            plugin_id=plugin_id,
+            executed_entry=entry_id,
+            args=args,
+            plugin_response=plugin_response,
+            received_at=event["received_at"],
+            plugin_forward_error=plugin_error,
+        )
 
-        return JSONResponse(resp)
+        return resp
 
     except HTTPException:
         raise

@@ -6,9 +6,6 @@ import inspect
 import logging
 import multiprocessing
 import threading
-import uuid
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 from multiprocessing import Queue
@@ -16,10 +13,8 @@ from queue import Empty
 
 from plugin.event_base import EVENT_META_ATTR
 from plugin.server_base import PluginContext
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+from plugin.resource_manager import PluginCommunicationResourceManager
+from plugin.models import HealthCheckResponse
 
 
 def _plugin_process_runner(
@@ -157,67 +152,165 @@ def _plugin_process_runner(
 
 
 class PluginProcessHost:
-    """负责启动/管理插件子进程并通过队列通信。"""
+    """
+    插件进程宿主
+    
+    负责管理插件进程的完整生命周期：
+    - 进程的启动、停止、监控（直接实现）
+    - 进程间通信（通过 PluginCommunicationResourceManager）
+    """
 
     def __init__(self, plugin_id: str, entry_point: str, config_path: Path):
         self.plugin_id = plugin_id
-        self.cmd_queue: Queue = multiprocessing.Queue()
-        self.res_queue: Queue = multiprocessing.Queue()
-        self.status_queue: Queue = multiprocessing.Queue()
-        self._pending_results: Dict[str, Any] = {}
+        self.logger = logging.getLogger(f"plugin.host.{plugin_id}")
+        
+        # 创建队列（由通信资源管理器管理）
+        cmd_queue: Queue = multiprocessing.Queue()
+        res_queue: Queue = multiprocessing.Queue()
+        status_queue: Queue = multiprocessing.Queue()
+        
+        # 创建并启动进程
         self.process = multiprocessing.Process(
             target=_plugin_process_runner,
-            args=(plugin_id, entry_point, config_path, self.cmd_queue, self.res_queue, self.status_queue),
+            args=(plugin_id, entry_point, config_path, cmd_queue, res_queue, status_queue),
             daemon=False,
         )
         self.process.start()
-
-    def shutdown(self, timeout: float = 5.0) -> None:
-        """优雅关闭插件进程。"""
+        
+        # 验证进程状态
+        if not self.process.is_alive():
+            self.logger.warning(f"Plugin {plugin_id} process is not alive after initialization")
+        
+        # 创建通信资源管理器
+        self.comm_manager = PluginCommunicationResourceManager(
+            plugin_id=plugin_id,
+            cmd_queue=cmd_queue,
+            res_queue=res_queue,
+            status_queue=status_queue,
+        )
+        
+        # 为了向后兼容，保留这些属性
+        self.cmd_queue = cmd_queue
+        self.res_queue = res_queue
+        self.status_queue = status_queue
+    
+    async def start(self) -> None:
+        """启动后台任务（需要在异步上下文中调用）"""
+        await self.comm_manager.start()
+    
+    async def shutdown(self, timeout: float = 5.0) -> None:
+        """
+        优雅关闭插件
+        
+        按顺序关闭：
+        1. 发送停止命令
+        2. 关闭通信资源
+        3. 关闭进程
+        """
+        self.logger.info(f"Shutting down plugin {self.plugin_id}")
+        
+        # 1. 发送停止命令
+        await self.comm_manager.send_stop_command()
+        
+        # 2. 关闭通信资源（包括后台任务）
+        await self.comm_manager.shutdown(timeout=timeout)
+        
+        # 3. 关闭进程
+        success = self._shutdown_process(timeout=timeout)
+        
+        if success:
+            self.logger.info(f"Plugin {self.plugin_id} shutdown successfully")
+        else:
+            self.logger.warning(f"Plugin {self.plugin_id} shutdown with issues")
+    
+    def shutdown_sync(self, timeout: float = 5.0) -> None:
+        """
+        同步版本的关闭方法（用于非异步上下文）
+        
+        注意：这个方法不会等待异步任务完成，建议使用 shutdown()
+        """
+        # 发送停止命令（同步）
         try:
             self.cmd_queue.put({"type": "STOP"}, timeout=1.0)
+        except Exception as e:
+            self.logger.warning(f"Failed to send STOP command: {e}")
+        
+        # 关闭进程
+        self._shutdown_process(timeout=timeout)
+    
+    async def trigger(self, entry_id: str, args: dict, timeout: float = 10.0) -> Any:
+        """
+        发送 TRIGGER 命令到子进程并等待结果
+        
+        委托给通信资源管理器处理
+        """
+        return await self.comm_manager.trigger(entry_id, args, timeout)
+    
+    def is_alive(self) -> bool:
+        """检查进程是否存活"""
+        return self.process.is_alive() and self.process.exitcode is None
+    
+    def health_check(self) -> HealthCheckResponse:
+        """执行健康检查，返回详细状态"""
+        alive = self.is_alive()
+        exitcode = self.process.exitcode
+        pid = self.process.pid if self.process.is_alive() else None
+        
+        if alive:
+            status = "running"
+        elif exitcode == 0:
+            status = "stopped"
+        else:
+            status = "crashed"
+        
+        return HealthCheckResponse(
+            alive=alive,
+            exitcode=exitcode,
+            pid=pid,
+            status=status,
+            communication={
+                "pending_requests": len(self.comm_manager._pending_futures),
+                "consumer_running": (
+                    self.comm_manager._result_consumer_task is not None
+                    and not self.comm_manager._result_consumer_task.done()
+                ),
+            },
+        )
+    
+    def _shutdown_process(self, timeout: float = 5.0) -> bool:
+        """
+        优雅关闭进程
+        
+        Args:
+            timeout: 等待进程退出的超时时间（秒）
+        
+        Returns:
+            True 如果成功关闭，False 如果超时或出错
+        """
+        if not self.process.is_alive():
+            self.logger.info(f"Plugin {self.plugin_id} process already stopped")
+            return True
+        
+        try:
+            # 先尝试优雅关闭（进程会从队列读取 STOP 命令后退出）
             self.process.join(timeout=timeout)
+            
             if self.process.is_alive():
-                logging.getLogger("user_plugin_server").warning(
-                    "Plugin %s didn't stop gracefully, terminating", self.plugin_id
+                self.logger.warning(
+                    f"Plugin {self.plugin_id} didn't stop gracefully within {timeout}s, terminating"
                 )
                 self.process.terminate()
                 self.process.join(timeout=1.0)
-        except Exception:
-            logging.getLogger("user_plugin_server").exception("Error shutting down plugin %s", self.plugin_id)
-
-    async def trigger(self, entry_id: str, args: dict, timeout: float = 10.0):
-        """发送 TRIGGER 命令到子进程并等待结果。"""
-        req_id = str(uuid.uuid4())
-        self.cmd_queue.put({"type": "TRIGGER", "req_id": req_id, "entry_id": entry_id, "args": args})
-
-        loop = asyncio.get_running_loop()
-        start = time.time()
-
-        while time.time() - start < timeout:
-            cached = self._pending_results.pop(req_id, None)
-            if cached is not None:
-                if cached["success"]:
-                    return cached["data"]
-                raise Exception(cached["error"])
-
-            try:
-                res = await loop.run_in_executor(None, self._get_result_safe)
-                if not res:
-                    continue
-
-                if res["req_id"] == req_id:
-                    if res["success"]:
-                        return res["data"]
-                    raise Exception(res["error"])
-
-                self._pending_results[res["req_id"]] = res
-            except Empty:
-                await asyncio.sleep(0.05)
-        raise TimeoutError("Plugin execution timed out")
-
-    def _get_result_safe(self):
-        try:
-            return self.res_queue.get_nowait()
-        except Empty:
-            return None
+                
+                if self.process.is_alive():
+                    self.logger.error(f"Plugin {self.plugin_id} failed to terminate, killing")
+                    self.process.kill()
+                    self.process.join(timeout=1.0)
+                    return False
+            
+            self.logger.info(f"Plugin {self.plugin_id} process shutdown successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.exception(f"Error shutting down plugin {self.plugin_id}: {e}")
+            return False

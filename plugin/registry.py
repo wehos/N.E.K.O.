@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
 
 from plugin.event_base import EventHandler, EVENT_META_ATTR
 from plugin.server_base import state
+from plugin.models import PluginMeta
 
 
 @dataclass
@@ -38,12 +39,9 @@ def get_plugins() -> List[Dict[str, Any]]:
     return list(state.plugins.values())
 
 
-def register_plugin(plugin: Dict[str, Any]) -> None:
+def register_plugin(plugin: PluginMeta) -> None:
     """Insert plugin into registry (not exposed as HTTP)."""
-    pid = plugin.get("id")
-    if not pid:
-        raise ValueError("plugin must have id")
-    state.plugins[pid] = plugin
+    state.plugins[plugin.id] = plugin.model_dump()
 
 
 def scan_static_metadata(pid: str, cls: type, conf: dict, pdata: dict) -> None:
@@ -126,13 +124,13 @@ def load_plugins_from_toml(
 
             scan_static_metadata(pid, cls, conf, pdata)
 
-            plugin_meta = {
-                "id": pid,
-                "name": pdata.get("name", pid),
-                "description": pdata.get("description", ""),
-                "version": pdata.get("version", "0.1.0"),
-                "input_schema": getattr(cls, "input_schema", {}) or {"type": "object", "properties": {}},
-            }
+            plugin_meta = PluginMeta(
+                id=pid,
+                name=pdata.get("name", pid),
+                description=pdata.get("description", ""),
+                version=pdata.get("version", "0.1.0"),
+                input_schema=getattr(cls, "input_schema", {}) or {"type": "object", "properties": {}},
+            )
             register_plugin(plugin_meta)
 
             logger.info("Loaded plugin %s (Process: %s)", pid, getattr(host, "process", None))
