@@ -15,7 +15,7 @@
     "verbatimModuleSyntax": true,
     "baseUrl": "."
   },
-  "include": ["./**/*.ts", "./**/*.tsx"],
+  "include": ["./**/*.ts", "./**/*.tsx", "./**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
 

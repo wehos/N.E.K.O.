@@ -26,9 +26,10 @@ export class RequestQueue {
     requests.forEach(({ resolve, reject, config }) => {
       if (error) {
         reject(error);
-      } else {
-        resolve(config);
+        return;
       }
+
+      Promise.resolve(resolve(config)).catch(reject);
     });
   }
 
@@ -90,6 +91,11 @@ export class RequestQueue {
    * 清空队列
    */
   clear(): void {
+    if (this.rejectRefresh) {
+      this.rejectRefresh(new Error("Request queue cleared"));
+      this.rejectRefresh = undefined;
+    }
+    this.resolveRefresh = undefined;
     this.queue = [];
     this.isRefreshing = false;
     this.refreshPromise = null;

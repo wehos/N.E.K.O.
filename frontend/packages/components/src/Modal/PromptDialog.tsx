@@ -71,24 +71,14 @@ export function PromptDialog({
   // 获取按钮文本（支持国际化）
   const getOkText = () => {
     if (okText) return okText;
-    try {
-      return window.t && typeof window.t === "function"
-        ? window.t("common.ok")
-        : "确定";
-    } catch (e) {
-      return "确定";
-    }
+    const canTranslate = typeof window !== "undefined" && typeof window.t === "function";
+    return canTranslate ? window.t("common.ok") : "确定";
   };
 
   const getCancelText = () => {
     if (cancelText) return cancelText;
-    try {
-      return window.t && typeof window.t === "function"
-        ? window.t("common.cancel")
-        : "取消";
-    } catch (e) {
-      return "取消";
-    }
+    const canTranslate = typeof window !== "undefined" && typeof window.t === "function";
+    return canTranslate ? window.t("common.cancel") : "取消";
   };
 
   return (

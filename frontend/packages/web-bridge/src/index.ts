@@ -75,6 +75,8 @@ export function bindStatusToastToWindow(handle: StatusToastHandle): Cleanup {
     return () => {};
   }
 
+  let reactReadyListenerAttached = false;
+
   const pendingMessages =
     window.__statusToastQueue && window.__statusToastQueue.length > 0
       ? [...window.__statusToastQueue]
@@ -90,20 +92,20 @@ export function bindStatusToastToWindow(handle: StatusToastHandle): Cleanup {
       return;
     }
 
-    try {
-      handle.show(message, duration);
-    } catch (e) {
-      console.warn("[Status Toast] React 未就绪，消息已加入队列:", e);
-      if (!window.__statusToastQueue) {
-        window.__statusToastQueue = [];
-      }
-      window.__statusToastQueue.push({ message, duration });
+    if (!window.__statusToastQueue) {
+      window.__statusToastQueue = [];
+    }
+    window.__statusToastQueue.push({ message, duration });
 
+    if (!reactReadyListenerAttached) {
       const handleReactReady = () => {
-        handle.show(message, duration);
-        window.removeEventListener("react-ready", handleReactReady);
+        const queue = window.__statusToastQueue || [];
+        queue.forEach((item) => handle.show(item.message, item.duration));
+        window.__statusToastQueue = [];
+        reactReadyListenerAttached = false;
       };
       window.addEventListener("react-ready", handleReactReady, { once: true });
+      reactReadyListenerAttached = true;
     }
   };
 

@@ -6,6 +6,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
+import { createPortal } from "react-dom";
 import "./StatusToast.css";
 
 export interface StatusToastProps {
@@ -65,6 +66,29 @@ const StatusToast = forwardRef<StatusToastHandle | null, StatusToastProps>(funct
 
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const portalContainerRef = useRef<HTMLElement | null>(null);
+  const createdPortalContainerRef = useRef(false);
+
+  // 创建 Portal 容器（SSR 安全）
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let container = document.getElementById("status-toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "status-toast-container";
+      document.body.appendChild(container);
+      createdPortalContainerRef.current = true;
+    }
+    portalContainerRef.current = container;
+
+    return () => {
+      if (createdPortalContainerRef.current && portalContainerRef.current?.parentNode) {
+        portalContainerRef.current.parentNode.removeChild(portalContainerRef.current);
+      }
+      portalContainerRef.current = null;
+      createdPortalContainerRef.current = false;
+    };
+  }, []);
 
   const showToast = useCallback((message: string, duration: number = 3000) => {
     if (hideTimer.current) {
@@ -134,8 +158,8 @@ const StatusToast = forwardRef<StatusToastHandle | null, StatusToastProps>(funct
       : "hide"
     : "";
 
-  // 返回真实 DOM（Portal 到 body），不再依赖外部容器
-  return (
+  // 返回真实 DOM，Portal 到 body（SSR 时回退为就地渲染）
+  const toastContent = (
     <div
       id="status-toast"
       className={className}
@@ -144,6 +168,8 @@ const StatusToast = forwardRef<StatusToastHandle | null, StatusToastProps>(funct
       {toastState.message}
     </div>
   );
+
+  return portalContainerRef.current ? createPortal(toastContent, portalContainerRef.current) : toastContent;
 });
 
 export { StatusToast };

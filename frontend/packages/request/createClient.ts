@@ -252,12 +252,36 @@ export function createRequestClient(options: RequestClientConfig): AxiosInstance
         await errorHandler(error);
       }
 
-      // 统一错误格式
+      // 统一错误格式，并对 config 进行脱敏（避免泄露 token/请求体等）
+      const sanitizedConfig = (() => {
+        if (!error.config) return undefined;
+        const {
+          url,
+          method,
+          baseURL,
+          timeout,
+          responseType,
+          withCredentials,
+          paramsSerializer
+        } = error.config;
+        // 仅保留非敏感字段，显式省略 headers/auth/params/data 等
+        return {
+          url,
+          method,
+          baseURL,
+          timeout,
+          responseType,
+          withCredentials,
+          // paramsSerializer 可能影响调试，但不包含敏感值
+          paramsSerializer
+        };
+      })();
+
       const errorResponse = {
         message: error.message || "Request failed",
         status: error.response?.status,
         data: error.response?.data,
-        config: error.config
+        config: sanitizedConfig
       };
 
       return Promise.reject(errorResponse);

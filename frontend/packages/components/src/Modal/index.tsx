@@ -228,11 +228,27 @@ const Modal = forwardRef<ModalHandle | null, {}>(function ModalComponent(_, ref)
   // 卸载时关闭未完成的对话框，避免悬挂的 Promise
   useEffect(() => {
     return () => {
-      if (dialogStateRef.current.isOpen) {
-        closeDialog();
+      if (!dialogStateRef.current.isOpen) return;
+
+      const { resolve, config } = dialogStateRef.current;
+
+      if (resolve && config) {
+        if (config.type === "prompt") {
+          resolve(null);
+        } else if (config.type === "confirm") {
+          resolve(false);
+        } else {
+          resolve(true);
+        }
       }
+
+      dialogStateRef.current = {
+        isOpen: false,
+        config: null,
+        resolve: null,
+      };
     };
-  }, [closeDialog]);
+  }, []);
 
   // 渲染对话框
   const renderDialog = () => {
