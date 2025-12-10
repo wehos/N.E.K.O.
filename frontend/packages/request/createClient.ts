@@ -5,6 +5,24 @@ import type { RequestClientConfig, TokenStorage, TokenRefreshFn } from "./src/re
 import { RequestQueue } from "./src/request-client/requestQueue";
 
 /**
+ * 检查是否启用请求日志
+ * 根据构建模式（mode）决定：开发模式启用，生产模式禁用
+ */
+const isRequestLogEnabled = (): boolean => {
+  try {
+    const env = (import.meta as any)?.env;
+    // 根据 MODE 或 NODE_ENV 判断：development 启用，production 禁用
+    const mode = env?.MODE || env?.NODE_ENV || 'development';
+    return mode === 'development';
+  } catch {
+    // 如果无法读取环境变量，默认启用（开发环境）
+    return true;
+  }
+};
+
+const REQUEST_LOG_ENABLED = isRequestLogEnabled();
+
+/**
  * 创建统一的请求客户端
  * 支持 Axios、Token 刷新、请求队列、Web/RN 通用存储
  */
@@ -37,6 +55,25 @@ export function createRequestClient(options: RequestClientConfig): AxiosInstance
    */
   instance.interceptors.request.use(
     async (config: InternalAxiosRequestConfig) => {
+      // 记录请求日志（仅在启用时）
+      if (REQUEST_LOG_ENABLED) {
+        const method = config.method?.toUpperCase() || 'GET';
+        const url = config.url || '';
+        const fullUrl = config.baseURL ? `${config.baseURL}${url}` : url;
+        
+        const logInfo: Record<string, unknown> = {};
+        if (config.params) {
+          const paramsStr = JSON.stringify(config.params);
+          logInfo.params = paramsStr.length > 200 ? paramsStr.substring(0, 200) + '...' : paramsStr;
+        }
+        if (config.data) {
+          const dataStr = typeof config.data === 'string' ? config.data : JSON.stringify(config.data);
+          logInfo.data = dataStr.length > 200 ? dataStr.substring(0, 200) + '...' : dataStr;
+        }
+        
+        console.log(`[Request] ${method} ${fullUrl}`, Object.keys(logInfo).length > 0 ? logInfo : '');
+      }
+
       // 如果正在刷新 token，将请求加入队列
       if (requestQueue.getIsRefreshing()) {
         return new Promise<InternalAxiosRequestConfig>((resolve, reject) => {
@@ -74,7 +111,12 @@ export function createRequestClient(options: RequestClientConfig): AxiosInstance
 
       return config;
     },
-    (error: AxiosError) => Promise.reject(error)
+    (error: AxiosError) => {
+      if (REQUEST_LOG_ENABLED) {
+        console.error('[Request] 请求拦截器错误:', error);
+      }
+      return Promise.reject(error);
+    }
   );
 
   /**
@@ -141,6 +183,28 @@ export function createRequestClient(options: RequestClientConfig): AxiosInstance
    */
   instance.interceptors.response.use(
     (response: AxiosResponse) => {
+      // 记录响应日志（仅在启用时）
+      if (REQUEST_LOG_ENABLED) {
+        const method = response.config.method?.toUpperCase() || 'GET';
+        const url = response.config.url || '';
+        const fullUrl = response.config.baseURL ? `${response.config.baseURL}${url}` : url;
+        const status = response.status;
+        
+        let responseDataStr = '';
+        if (response.data !== undefined && response.data !== null) {
+          if (typeof response.data === 'object') {
+            responseDataStr = JSON.stringify(response.data);
+          } else {
+            responseDataStr = String(response.data);
+          }
+          if (responseDataStr.length > 200) {
+            responseDataStr = responseDataStr.substring(0, 200) + '...';
+          }
+        }
+        
+        console.log(`[Request] ${method} ${fullUrl} 响应 ${status}`, responseDataStr || '');
+      }
+
       // 执行自定义成功拦截器
       if (responseInterceptor?.onFulfilled) {
         return responseInterceptor.onFulfilled(response);
@@ -150,6 +214,34 @@ export function createRequestClient(options: RequestClientConfig): AxiosInstance
       return returnDataOnly ? response.data : response;
     },
     async (error: AxiosError) => {
+      // 记录错误日志（仅在启用时）
+      if (REQUEST_LOG_ENABLED) {
+        const method = error.config?.method?.toUpperCase() || 'GET';
+        const url = error.config?.url || '';
+        const fullUrl = error.config?.baseURL ? `${error.config.baseURL}${url}` : url;
+        const status = error.response?.status;
+        
+        const errorInfo: Record<string, unknown> = {
+          status: status || 'N/A',
+          message: error.message || 'Unknown error'
+        };
+        
+        if (error.response?.data) {
+          let errorDataStr = '';
+          if (typeof error.response.data === 'object') {
+            errorDataStr = JSON.stringify(error.response.data);
+          } else {
+            errorDataStr = String(error.response.data);
+          }
+          if (errorDataStr.length > 200) {
+            errorDataStr = errorDataStr.substring(0, 200) + '...';
+          }
+          errorInfo.data = errorDataStr;
+        }
+        
+        console.error(`[Request] ${method} ${fullUrl} 失败:`, errorInfo);
+      }
+
       // 执行自定义错误拦截器
       if (responseInterceptor?.onRejected) {
         return responseInterceptor.onRejected(error);

@@ -25,7 +25,16 @@ frontend/
 │   ├── components/       # UI 组件库
 │   │   ├── src/
 │   │   │   ├── Button.tsx
-│   │   │   └── Button.css
+│   │   │   ├── Button.css
+│   │   │   ├── StatusToast.tsx
+│   │   │   ├── StatusToast.css
+│   │   │   └── Modal/            # 模态框组件
+│   │   │       ├── BaseModal.tsx
+│   │   │       ├── AlertDialog.tsx
+│   │   │       ├── ConfirmDialog.tsx
+│   │   │       ├── PromptDialog.tsx
+│   │   │       ├── Modal.css
+│   │   │       └── index.tsx
 │   │   ├── index.ts      # 组件导出入口
 │   │   └── vite.config.ts
 │   ├── request/          # HTTP 请求库（Axios 封装）
@@ -42,6 +51,11 @@ frontend/
 │   │           ├── index.web.ts
 │   │           ├── index.native.ts
 │   │           └── ...
+│   ├── web-bridge/       # 桥接层（将组件与请求能力暴露到 window）
+│   │   ├── src/
+│   │   │   ├── index.ts
+│   │   │   └── global.ts
+│   │   └── vite.config.ts
 │   └── common/           # 公共工具与类型
 │       ├── index.ts
 │       └── vite.config.ts
@@ -59,17 +73,40 @@ frontend/
 ## 目录说明
 
 - **`src/web/`**: SPA 应用入口，包含 `main.tsx`（React 挂载）和 `App.tsx`（主组件逻辑）
-- **`packages/components/`**: UI 组件库，产出 ES/UMD 双格式，支持外部化 React/ReactDOM
+- **`packages/components/`**: UI 组件库，产出 ES/UMD 双格式，支持外部化 React/ReactDOM，包含 Button、StatusToast、Modal 等组件
 - **`packages/request/`**: Axios 封装库，提供请求队列、Token 自动刷新等功能，支持 Web/React Native 双平台
+- **`packages/web-bridge/`**: 桥接层，将组件和请求能力暴露到 `window` 对象，供非 React 代码使用
 - **`packages/common/`**: 公共类型定义（如 `ApiResponse<T>`）和工具函数
 - **`scripts/`**: 构建辅助脚本，用于清理输出目录和复制 React UMD 文件
 - **`vendor/react/`**: React/ReactDOM 生产环境 UMD 源文件，构建时复制到 `static/bundles`
-- **`static/bundles/`**: 构建输出目录（位于仓库根目录，由脚本自动创建/清理）
+- **`static/bundles/`**: 构建输出目录（位于仓库根目录，由脚本自动创建/清理），存放组件库、请求库、web-bridge 等构建产物
+- **`dist/webapp/`**: Web 应用构建输出目录，存放 `react_web.js`（SPA 入口）
 
 ## 环境要求
 
 - **Node.js**: 推荐 22.x 或 20.x LTS；18.x 作为最低兼容基线，不建议再低
 - **npm**: 推荐 11.x；10.x 作为最低兼容基线
+
+## 环境变量示例
+
+- 已提供示例文件：`frontend/.env.example`
+- 使用方式：复制为 `.env`（或针对环境创建 `.env.local` 等），再按需修改
+
+内容字段说明：
+```
+# API 服务器基础地址
+VITE_API_BASE_URL=http://localhost:48911
+
+# 静态资源服务器根路径（提供 /static），不填则回退到 VITE_API_BASE_URL
+VITE_STATIC_SERVER_URL=http://localhost:48911
+
+# WebSocket 基础地址，不填则回退到 VITE_API_BASE_URL
+VITE_WEBSOCKET_URL=ws://localhost:48911
+```
+
+**注意**：请求日志的启用/禁用由构建模式自动控制：
+- 开发构建 (`npm run build:dev`)：自动启用请求日志
+- 生产构建 (`npm run build:prod`)：自动禁用请求日志
 
 ## 安装
 
@@ -108,30 +145,36 @@ npm install
 
 ### 开发示例
 
-示例页面内置一个请求按钮，调用 `/api/config/page_config` 并打印返回：
+示例页面（`src/web/App.tsx`）展示了以下功能：
 
-```17:28:frontend/src/web/App.tsx
-function App() {
-  const handleClick = useCallback(async () => {
-    try {
-      const data = await request.get("/api/config/page_config", {
-        params: { lanlan_name: "test" }
-      });
-      // 将返回结果展示在控制台或弹窗
-      console.log("page_config:", data);
-    } catch (err: any) {
-      console.error("请求失败", err);
-    }
-  }, []);
+1. **API 请求示例**：调用 `/api/config/page_config` 并打印返回结果
+2. **StatusToast 使用**：通过 ref 调用 `show()` 方法显示提示消息
+3. **Modal 使用**：展示 `AlertDialog`、`ConfirmDialog`、`PromptDialog` 的使用方式
+
+示例代码读取可配置的 API / 静态资源基址（默认回退到 48911）：
+
+```9:18:frontend/src/web/App.tsx
+const API_BASE = trimTrailingSlash(
+  (import.meta as any).env?.VITE_API_BASE_URL ||
+    (typeof window !== "undefined" ? (window as any).API_BASE_URL : "") ||
+    "http://localhost:48911"
+);
+const STATIC_BASE = trimTrailingSlash(
+  (import.meta as any).env?.VITE_STATIC_SERVER_URL ||
+    (typeof window !== "undefined" ? (window as any).STATIC_SERVER_URL : "") ||
+    API_BASE
+);
 ```
+
+> StatusToast 会自动解析静态基址：`staticBaseUrl` prop（若传）→ `window.STATIC_SERVER_URL` → `window.API_BASE_URL` → `VITE_STATIC_SERVER_URL` → `VITE_API_BASE_URL` → 默认 `http://localhost:48911`。示例中通过 `staticBaseUrl={STATIC_BASE}` 显式传入。
 
 ### 请求客户端使用
 
-在 `App.tsx` 中创建请求客户端实例：
+在 `App.tsx` 中创建请求客户端实例（同样使用可配置基址，默认回退 48911）：
 
-```7:15:frontend/src/web/App.tsx
+```21:29:frontend/src/web/App.tsx
 const request = createRequestClient({
-  baseURL: "http://localhost:48911",
+  baseURL: API_BASE,
   storage: new WebTokenStorage(),
   refreshApi: async () => {
     // 示例中不做刷新，实际可按需实现
@@ -143,14 +186,54 @@ const request = createRequestClient({
 
 也可以直接使用 `packages/request/index.web.ts` 导出的默认实例（已配置 Token 刷新）。
 
+### 组件使用示例
+
+**StatusToast**：
+```typescript
+const toastRef = useRef<StatusToastHandle | null>(null);
+// 显示提示
+toastRef.current?.show("接口调用成功", 2500);
+```
+
+**Modal**：
+```typescript
+const modalRef = useRef<ModalHandle | null>(null);
+// Alert
+await modalRef.current?.alert("这是一条 Alert 弹窗", "提示");
+// Confirm
+const ok = await modalRef.current?.confirm("确认要执行该操作吗？", "确认");
+// Prompt
+const name = await modalRef.current?.prompt("请输入昵称：", "Neko");
+```
+
 ## 构建
+
+### 构建模式
+
+项目支持两种构建模式：
+
+- **开发构建** (`build:dev`): 用于本地开发和调试
+  - 启用请求日志 (`VITE_REQUEST_LOG_ENABLED=true`)
+  - 生成 sourcemap 便于调试
+  - 不压缩代码，便于阅读和调试
+  
+- **生产构建** (`build:prod`): 用于生产环境部署
+  - 禁用请求日志 (`VITE_REQUEST_LOG_ENABLED=false`)
+  - 不生成 sourcemap（减小体积）
+  - 压缩代码（esbuild minify）
 
 ### 完整构建
 
-执行完整构建流程：
-
+**生产构建**（默认）：
 ```bash
 cd frontend && npm run build
+# 或
+cd frontend && npm run build:prod
+```
+
+**开发构建**：
+```bash
+cd frontend && npm run build:dev
 ```
 
 （PowerShell: `cd frontend; npm run build`）
@@ -161,38 +244,68 @@ cd frontend && npm run build
 2. **`build:request`**: 构建请求库，产出 ES/UMD 双格式
 3. **`build:common`**: 构建通用工具包，产出 ES/UMD 双格式
 4. **`build:components`**: 构建组件库，产出 ES/UMD 双格式，外部化 `react`/`react-dom`，生成 `components.css`
-5. **`build:web`**: 构建 Web 应用入口，生成 `react_web.js`（ES 模块）
-6. **`copy:react-umd`**: 复制 `vendor/react/*.js` 到 `static/bundles`
+5. **`build:web-bridge`**: 构建桥接层，产出 ES/UMD 双格式，将组件和请求能力暴露到 `window`
+6. **`build:web`**: 构建 Web 应用入口，生成 `react_web.js`（ES 模块），输出到 `dist/webapp`
+7. **`copy:react-umd`**: 复制 `vendor/react/*.js` 到 `static/bundles`
 
 ### 单独构建
 
 可以单独构建某个包或入口：
 
+**生产构建**：
 ```bash
 # 构建组件库
-cd frontend && npm run build:components
+cd frontend && npm run build:components:prod
 
 # 构建请求库
-cd frontend && npm run build:request
+cd frontend && npm run build:request:prod
 
 # 构建通用工具
-cd frontend && npm run build:common
+cd frontend && npm run build:common:prod
+
+# 构建桥接层
+cd frontend && npm run build:web-bridge:prod
 
 # 构建 Web 应用
-cd frontend && npm run build:web
+cd frontend && npm run build:web:prod
 ```
+
+**开发构建**：
+```bash
+# 构建组件库
+cd frontend && npm run build:components:dev
+
+# 构建请求库
+cd frontend && npm run build:request:dev
+
+# 构建通用工具
+cd frontend && npm run build:common:dev
+
+# 构建桥接层
+cd frontend && npm run build:web-bridge:dev
+
+# 构建 Web 应用
+cd frontend && npm run build:web:dev
+```
+
+**注意**：不带 `:dev` 或 `:prod` 后缀的命令默认使用生产模式。
 
 ### 构建产物
 
-主要产物位于 `static/bundles/`（仓库根目录）：
+主要产物位于以下目录：
 
-- **`react_web.js`**: SPA 入口（ESM 格式）
+**`static/bundles/`**（仓库根目录）：
 - **`components.js`** / **`components.es.js`**: 组件库（UMD/ES 格式）
 - **`components.css`**: 组件库样式文件
 - **`common.js`** / **`common.es.js`**: 通用工具（UMD/ES 格式）
 - **`request.js`** / **`request.es.js`**: 请求库（UMD/ES 格式）
+- **`web-bridge.js`** / **`web-bridge.es.js`**: 桥接层（UMD/ES 格式）
 - **`react.production.min.js`**: React 生产环境 UMD（由脚本复制）
 - **`react-dom.production.min.js`**: ReactDOM 生产环境 UMD（由脚本复制）
+
+**`dist/webapp/`**（frontend 目录下）：
+- **`react_web.js`**: SPA 入口（ESM 格式）
+- **`frontend.css`**: Web 应用样式文件
 
 所有构建产物均包含 source map 文件（`.map`）。
 
@@ -201,6 +314,8 @@ cd frontend && npm run build:web
 ### HTML 模板引用
 
 在服务端模板中按以下顺序引用构建产物：
+
+**方式一：使用 SPA 应用（推荐）**
 
 ```html
 <!-- 1. 引入 React/ReactDOM UMD（组件库依赖） -->
@@ -214,14 +329,38 @@ cd frontend && npm run build:web
 <script src="/static/bundles/components.js"></script>
 
 <!-- 4. 引入 SPA 入口（ES 模块） -->
+<!-- 注意：react_web.js 构建在 dist/webapp/，需要复制到 static/bundles/ 或配置静态服务指向 dist/webapp -->
 <script type="module" src="/static/bundles/react_web.js"></script>
+<link rel="stylesheet" href="/static/bundles/frontend.css" />
+```
+
+**方式二：仅使用桥接层（非 React 环境）**
+
+```html
+<!-- 1. 引入 React/ReactDOM UMD -->
+<script src="/static/bundles/react.production.min.js"></script>
+<script src="/static/bundles/react-dom.production.min.js"></script>
+
+<!-- 2. 引入组件库样式 -->
+<link rel="stylesheet" href="/static/bundles/components.css" />
+
+<!-- 3. 引入组件库 UMD -->
+<script src="/static/bundles/components.js"></script>
+
+<!-- 4. 引入请求库 UMD（可选，web-bridge 会自动创建默认实例） -->
+<script src="/static/bundles/request.js"></script>
+
+<!-- 5. 引入桥接层 UMD（自动将组件和请求能力暴露到 window） -->
+<script src="/static/bundles/web-bridge.js"></script>
 ```
 
 ### 说明
 
 - 组件库 UMD 依赖全局 `React` 和 `ReactDOM`，因此需要先加载 React UMD
 - SPA 入口以 ES 模块形式挂载到页面中的 `#root` 元素
-- 确保页面中存在 `<div id="root"></div>` 作为挂载点
+- 确保页面中存在 `<div id="root"></div>` 作为挂载点（使用 SPA 时）
+- 桥接层会自动将 `StatusToast`、`Modal` 和请求客户端绑定到 `window` 对象，供非 React 代码使用
+- 使用桥接层时，可通过 `window.showStatusToast()`、`window.showAlert()`、`window.showConfirm()`、`window.showPrompt()` 和 `window.request` 等 API
 
 ## 其他脚本
 
@@ -249,7 +388,13 @@ cd frontend && npm run clean:bundles
 
 UI 组件库，当前包含：
 
-- **Button**: 基础按钮组件
+- **Button**: 基础按钮组件，支持多种变体（primary、secondary、success、danger）和尺寸
+- **StatusToast**: 状态提示组件，用于显示成功、错误、警告等信息
+- **Modal**: 模态框组件系统
+  - **BaseModal**: 基础模态框组件
+  - **AlertDialog**: 警告对话框
+  - **ConfirmDialog**: 确认对话框
+  - **PromptDialog**: 输入对话框
 
 组件库使用经典 JSX 转换（`React.createElement`），确保 UMD 格式在浏览器中与 React UMD 兼容。
 
@@ -261,6 +406,16 @@ HTTP 请求库，基于 Axios 封装，提供：
 - **Token 管理**: 自动存储和刷新访问令牌
 - **平台适配**: 支持 Web（localStorage）和 React Native（AsyncStorage）
 - **错误处理**: 统一的错误处理机制
+
+### `@project_neko/web-bridge`
+
+桥接层，将 React 组件和请求能力暴露到 `window` 对象，供非 React 代码使用。主要功能：
+
+- **bindStatusToastToWindow()**: 将 `StatusToast` 绑定到 `window.showStatusToast()`
+- **bindModalToWindow()**: 将 `Modal` 绑定到 `window.showAlert()`、`window.showConfirm()`、`window.showPrompt()`
+- **bindRequestToWindow()**: 将请求客户端绑定到 `window.request`，并提供 URL 构建工具
+- **createAndBindRequest()**: 创建请求客户端并自动绑定到 `window`
+- **autoBindDefaultRequest()**: 自动绑定默认请求客户端（UMD 加载时自动执行）
 
 ### `@project_neko/common`
 
@@ -274,7 +429,7 @@ HTTP 请求库，基于 Axios 封装，提供：
 1. **构建顺序**: 完整构建必须按顺序执行，因为某些包可能依赖其他包的构建产物
 2. **React 版本**: 确保 `vendor/react/` 中的 React UMD 文件版本与 `package.json` 中的版本一致
 3. **路径别名**: 仅在开发环境中生效，构建时会解析为实际路径
-4. **UMD 全局变量**: 组件库 UMD 使用全局变量名 `NEKOComponents`，请求库使用 `NEKORequest`，通用工具使用 `NEKOCommon`
+4. **UMD 全局变量**: 组件库 UMD 使用全局变量名 `ProjectNekoComponents`，请求库使用 `ProjectNekoRequest`，通用工具使用 `ProjectNekoCommon`，桥接层使用 `ProjectNekoBridge`
 5. **TypeScript 配置**: 项目使用 `moduleResolution: "Bundler"`，适合 Vite 构建环境
 
 ## 故障排查
@@ -301,5 +456,7 @@ HTTP 请求库，基于 Axios 封装，提供：
 
 - 检查浏览器控制台错误信息
 - 确认服务端模板中脚本引用顺序正确
-- 验证 `#root` 元素是否存在
+- 验证 `#root` 元素是否存在（使用 SPA 时）
+- 确认 React/ReactDOM UMD 已正确加载（检查全局 `React` 和 `ReactDOM` 对象）
+- 使用桥接层时，确认组件库和请求库已加载，且 `window` 对象上存在相应 API
 
