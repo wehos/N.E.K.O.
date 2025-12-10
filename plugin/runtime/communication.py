@@ -271,7 +271,13 @@ class PluginCommunicationResourceManager:
                 try:
                     if self._message_target_queue:
                         await self._message_target_queue.put(msg)
-                        self.logger.debug(f"Forwarded message from plugin {self.plugin_id} to main queue")
+                        self.logger.info(
+                            f"[MESSAGE FORWARD] Plugin: {self.plugin_id} | "
+                            f"Source: {msg.get('source', 'unknown')} | "
+                            f"Priority: {msg.get('priority', 0)} | "
+                            f"Description: {msg.get('description', '')} | "
+                            f"Content: {str(msg.get('content', ''))[:100]}"
+                        )
                 except asyncio.QueueFull:
                     self.logger.warning(f"Main message queue is full, dropping message from plugin {self.plugin_id}")
                 except (AttributeError, RuntimeError) as e:

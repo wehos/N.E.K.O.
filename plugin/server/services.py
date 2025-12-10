@@ -226,7 +226,18 @@ def get_messages_from_queue(
                 timestamp=msg.get("time", now_iso()),
                 message_id=message_id,
             )
-            messages.append(plugin_message.model_dump())
+            message_dict = plugin_message.model_dump()
+            messages.append(message_dict)
+            
+            # 服务器终端日志输出
+            logger.info(
+                f"[MESSAGE] Plugin: {msg.get('plugin_id', 'unknown')} | "
+                f"Source: {msg.get('source', 'unknown')} | "
+                f"Priority: {msg.get('priority', 0)} | "
+                f"Description: {msg.get('description', '')} | "
+                f"Content: {msg.get('content', '')[:100]}"
+            )
+            
             count += 1
             
         except asyncio.QueueEmpty:
@@ -270,8 +281,12 @@ def push_message_to_queue(
     try:
         state.message_queue.put_nowait(message)
         logger.info(
-            f"[plugin_push] plugin_id={plugin_id} source={source} "
-            f"type={message_type} priority={priority}"
+            f"[MESSAGE PUSH] Plugin: {plugin_id} | "
+            f"Source: {source} | "
+            f"Type: {message_type} | "
+            f"Priority: {priority} | "
+            f"Description: {description} | "
+            f"Content: {(content or '')[:100]}"
         )
     except asyncio.QueueFull:
         # 队列满时，尝试移除最旧的消息
