@@ -3964,7 +3964,8 @@ function init_app(){
                     checkToolServerHealth(),
                     fetch('/api/agent/flags').then(r => r.ok ? r.json() : { success: false }),
                     checkCapability('computer_use', false),
-                    checkCapability('mcp', false)
+                    checkCapability('mcp', false),
+                    checkCapability('user_plugin', false)
                 ]);
                 
                 // 【竞态保护 1】检查序列号是否过期（防止旧请求覆盖新请求）

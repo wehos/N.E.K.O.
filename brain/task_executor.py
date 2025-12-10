@@ -2,7 +2,7 @@
 """
 DirectTaskExecutor: 合并 Analyzer + Planner 的功能
 并行评估 MCP 和 ComputerUse 和 UserPlugin 可行性（三个独立 LLM 调用）
-优先使用 MCP，其次使用 ComputerUse，最后使用 UserPlugin
+优先使用 MCP,其次使用 ComputerUse,最后使用 UserPlugin
 """
 import json
 import asyncio
@@ -53,14 +53,23 @@ class ComputerUseDecision:
     task_description: str = ""
     reason: str = ""
 
-
+@dataclass
+class UserPluginDecision:
+    """UserPlugin 可行性评估结果"""
+    has_task: bool = False
+    can_execute: bool = False
+    task_description: str = ""
+    plugin_id: Optional[str] = None
+    entry_id: Optional[str] = None
+    plugin_args: Optional[Dict] = None
+    reason: str = ""
 class DirectTaskExecutor:
     """
     直接任务执行器：并行评估 MCP、UserPlugin 与 ComputerUse 可行性
     
     流程:
-    1. 并行调用多个评估器：_assess_mcp、_assess_user_plugin、_assess_computer_use
-    2. 优先使用 MCP（如果可行），`其次 UserPlugin，`再次 ComputerUse,`其次 UserPlugin（优先级可调整）
+    1. 并行调用多个评估器:_assess_mcp、_assess_user_plugin、_assess_computer_use
+    2. 优先使用 MCP(如果可行),再次 ComputerUse,再次 UserPlugin (优先级可调整)
     3. 执行选中的方法
     """
     
