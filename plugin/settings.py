@@ -25,7 +25,8 @@ def get_plugin_config_root() -> Path:
     """
     custom_path = os.getenv("PLUGIN_CONFIG_ROOT")
     if custom_path:
-        return Path(custom_path)
+        # 支持 ~ 和相对路径，统一解析为绝对路径
+        return Path(custom_path).expanduser().resolve()
     # 默认路径：相对于 plugin 目录
     return Path(__file__).parent / "plugins"
 
@@ -130,6 +131,9 @@ PLUGIN_LOG_MAX_FILES = 20
 def validate_config() -> None:
     """
     验证配置的有效性
+    
+    硬校验：模块导入时即验证并抛出异常，避免启动后才发现配置非法。
+    如未来改为运行时可配置，请同步调整校验时机和策略。
     
     Raises:
         ValueError: 如果配置无效

@@ -157,7 +157,7 @@ async def trigger_plugin(
         raise HTTPException(
             status_code=503,
             detail=f"Plugin '{plugin_id}' health check failed"
-        )
+        ) from e
     
     # 执行插件
     plugin_response: Any = None
@@ -191,7 +191,7 @@ async def trigger_plugin(
 
 def get_messages_from_queue(
     plugin_id: Optional[str] = None,
-    max_count: int = None,
+    max_count: int | None = None,
     priority_min: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -333,13 +333,13 @@ def push_message_to_queue(
             raise HTTPException(
                 status_code=503,
                 detail="Message queue is full, please try again later"
-            )
+            ) from e
     except (AttributeError, RuntimeError) as e:
         logger.error(f"Message queue error: {e}")
         raise HTTPException(
             status_code=503,
             detail="Message queue is not available"
-        )
+        ) from e
     
     return message_id
 

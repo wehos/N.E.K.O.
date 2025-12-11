@@ -23,6 +23,7 @@ from plugin.settings import (
     MESSAGE_CONSUMER_SLEEP_INTERVAL,
     RESULT_CONSUMER_SLEEP_INTERVAL,
 )
+from plugin.api.exceptions import PluginExecutionError
 
 
 @dataclass
@@ -175,12 +176,12 @@ class PluginCommunicationResourceManager:
                 if result["success"]:
                     return result["data"]
                 else:
-                    raise Exception(result.get("error", "Unknown error"))
+                    raise PluginExecutionError(self.plugin_id, entry_id, result.get("error", "Unknown error"))
             except asyncio.TimeoutError:
                 self.logger.error(
                     f"Plugin {self.plugin_id} entry {entry_id} timed out after {timeout}s"
                 )
-                raise TimeoutError(f"Plugin execution timed out after {timeout}s")
+                raise TimeoutError(f"Plugin execution timed out after {timeout}s") from None
         finally:
             # 清理 Future（无论成功还是失败）
             self._pending_futures.pop(req_id, None)
@@ -200,7 +201,7 @@ class PluginCommunicationResourceManager:
         这个任务会一直运行直到收到关闭信号
         """
         self._ensure_shutdown_event()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         while not self._shutdown_event.is_set():
             try:
@@ -242,7 +243,7 @@ class PluginCommunicationResourceManager:
                 # 短暂休眠避免 CPU 占用过高
                 await asyncio.sleep(RESULT_CONSUMER_SLEEP_INTERVAL)
     
-    def get_status_messages(self, max_count: int = None) -> list[Dict[str, Any]]:
+    def get_status_messages(self, max_count: int | None = None) -> list[Dict[str, Any]]:
         """
         从状态队列中获取消息（非阻塞）
         
@@ -277,7 +278,7 @@ class PluginCommunicationResourceManager:
             return
         
         self._ensure_shutdown_event()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         while not self._shutdown_event.is_set():
             try:

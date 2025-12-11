@@ -15,7 +15,7 @@ from plugin.sdk.base import NekoPluginBase
 class TkWindowPlugin(NekoPluginBase):
     def __init__(self, ctx: Any):
         super().__init__(ctx)
-        # 启用文件日志（同时输出到文件和控制台）
+        # 启用文件日志(同时输出到文件和控制台)
         self.file_logger = self.enable_file_logging(log_level=logging.INFO)
         self._lock = threading.Lock()
         self._started: bool = False
@@ -54,7 +54,7 @@ class TkWindowPlugin(NekoPluginBase):
             self._root = None
             self._should_close = False
 
-    # 1) 一个 plugin_entry:对外可调用,"打开窗口"
+        # 1) 一个 plugin_entry: 对外可调用,"打开窗口"
     @plugin_entry(
         id="open",
         name="Open a Tk window",
@@ -72,7 +72,7 @@ class TkWindowPlugin(NekoPluginBase):
         window_message = message or "Hello from Tk plugin!"
         with self._lock:
             if self._started:
-                # 推送消息：窗口已打开
+                # 推送消息: 窗口已打开
                 self.ctx.push_message(
                     source="open_window",
                     message_type="text",
@@ -90,7 +90,7 @@ class TkWindowPlugin(NekoPluginBase):
             )
             self._thread = t
         
-        # 推送消息：窗口正在打开
+        # 推送消息: 窗口正在打开
         self.ctx.push_message(
             source="open_window",
             message_type="text",
@@ -104,7 +104,7 @@ class TkWindowPlugin(NekoPluginBase):
         
         self.report_status({"started": True})
         
-        # 推送消息：窗口已成功打开
+        # 推送消息: 窗口已成功打开
         self.ctx.push_message(
             source="open_window",
             message_type="text",
@@ -116,7 +116,7 @@ class TkWindowPlugin(NekoPluginBase):
         
         return {"started": True, "info": "Tk window thread started"}
 
-    # 2) 另一个 plugin_entry:关闭窗口
+    # 2) 另一个 plugin_entry: 关闭窗口
     @plugin_entry(
         id="close",
         name="Close Tk Window",
@@ -126,7 +126,7 @@ class TkWindowPlugin(NekoPluginBase):
         with self._lock:
             if self._root is not None:
                 self._should_close = True
-                # 推送消息：窗口正在关闭
+                # 推送消息: 窗口正在关闭
                 self.ctx.push_message(
                     source="close_window",
                     message_type="text",
@@ -137,7 +137,7 @@ class TkWindowPlugin(NekoPluginBase):
                 )
                 return {"closed": True}
             else:
-                # 推送消息：没有窗口可关闭
+                # 推送消息: 没有窗口可关闭
                 self.ctx.push_message(
                     source="close_window",
                     message_type="text",
@@ -148,7 +148,7 @@ class TkWindowPlugin(NekoPluginBase):
                 )
                 return {"closed": False, "reason": "no window"}
     
-    # 3) 新建一个测试入口：发送测试消息
+    # 3) 新建一个测试入口: 发送测试消息
     @plugin_entry(
         id="test_message",
         name="Send Test Message",
@@ -188,7 +188,7 @@ class TkWindowPlugin(NekoPluginBase):
             "info": "Test message sent to server"
         }
 
-    # 3) 一个 lifecycle 事件:插件加载后自动调用
+    # 3) 一个 lifecycle 事件: 插件加载后自动调用
     @on_event(
         event_type="lifecycle",
         id="startup",
@@ -202,7 +202,7 @@ class TkWindowPlugin(NekoPluginBase):
         self.file_logger.info("[tkWindow] plugin started")
         self.report_status({"status": "initialized"})
         return {"status": "initialized"}
-    # 4) 一个 lifecycle 事件:插件停止时自动调用
+    # 4) 一个 lifecycle 事件: 插件停止时自动调用
     @on_event(
         event_type="lifecycle",
         id="on_shutdown",
