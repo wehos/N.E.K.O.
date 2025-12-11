@@ -77,10 +77,11 @@ class LLMSessionManager:
             self.recent_log
         ) = self._config_manager.get_character_data()
         # API配置现在通过 _config_manager.get_model_api_config() 动态获取
-        core_config = self._config_manager.get_core_config()
-        self.core_api_type = core_config['CORE_API_TYPE']  # 用于判断TTS类型等
+        # core_api_type 从 realtime 配置获取，支持自定义 realtime API 时自动设为 'local'
+        realtime_config = self._config_manager.get_model_api_config('realtime')
+        self.core_api_type = realtime_config.get('api_type', '') or self._config_manager.get_core_config().get('CORE_API_TYPE', '')
         self.memory_server_port = MEMORY_SERVER_PORT
-        self.audio_api_key = core_config['AUDIO_API_KEY']  # 用于CosyVoice自定义音色
+        self.audio_api_key = self._config_manager.get_core_config()['AUDIO_API_KEY']  # 用于CosyVoice自定义音色
         self.voice_id = self.lanlan_basic_config[self.lanlan_name].get('voice_id', '')
         # 注意：use_tts 会在 start_session 中根据 input_mode 重新设置
         self.use_tts = False
@@ -500,10 +501,11 @@ class LLMSessionManager:
         # 立即通知前端系统正在准备（静默期开始）
         await self.send_session_preparing(input_mode)
         
-        # 重新读取核心配置以支持热重载
-        core_config = self._config_manager.get_core_config()
-        self.core_api_type = core_config['CORE_API_TYPE']
-        self.audio_api_key = core_config['AUDIO_API_KEY']
+        # 重新读取配置以支持热重载
+        # core_api_type 从 realtime 配置获取，支持自定义 realtime API 时自动设为 'local'
+        realtime_config = self._config_manager.get_model_api_config('realtime')
+        self.core_api_type = realtime_config.get('api_type', '') or self._config_manager.get_core_config().get('CORE_API_TYPE', '')
+        self.audio_api_key = self._config_manager.get_core_config()['AUDIO_API_KEY']
         
         # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
         _,_,_,lanlan_basic_config_updated,_,_,_,_,_,_ = self._config_manager.get_character_data()
@@ -880,10 +882,11 @@ class LLMSessionManager:
 
         # 2. Create PENDING session components (as before, store in self.pending_connector, self.pending_session)
         try:
-            # 重新读取核心配置以支持热重载
-            core_config = self._config_manager.get_core_config()
-            self.core_api_type = core_config['CORE_API_TYPE']
-            self.audio_api_key = core_config['AUDIO_API_KEY']
+            # 重新读取配置以支持热重载
+            # core_api_type 从 realtime 配置获取，支持自定义 realtime API 时自动设为 'local'
+            realtime_config = self._config_manager.get_model_api_config('realtime')
+            self.core_api_type = realtime_config.get('api_type', '') or self._config_manager.get_core_config().get('CORE_API_TYPE', '')
+            self.audio_api_key = self._config_manager.get_core_config()['AUDIO_API_KEY']
             
             # 重新读取角色配置以获取最新的voice_id（支持角色切换后的音色热更新）
             _,_,_,lanlan_basic_config_updated,_,_,_,_,_,_ = self._config_manager.get_character_data()

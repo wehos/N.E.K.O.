@@ -877,6 +877,9 @@ class ConfigManager:
                     'api_key': custom_key,
                     'base_url': custom_url,
                     'is_custom': True,
+                    # 对于 realtime 模型，自定义配置时 api_type 设为 'local'
+                    # TODO: 后续完善 'local' 类型的具体实现（如本地推理服务等）
+                    'api_type': 'local' if model_type == 'realtime' else None,
                 }
         
         # 根据 fallback_type 回退到不同的 API
@@ -887,6 +890,8 @@ class ConfigManager:
                 'api_key': core_config.get('CORE_API_KEY', ''),
                 'base_url': core_config.get('CORE_URL', ''),
                 'is_custom': False,
+                # 对于 realtime 模型，回退到核心API时使用配置的 CORE_API_TYPE
+                'api_type': core_config.get('CORE_API_TYPE', '') if model_type == 'realtime' else None,
             }
         else:
             # 回退到辅助 API 配置
