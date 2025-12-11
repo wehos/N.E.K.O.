@@ -83,9 +83,6 @@ class OmniOfflineClient:
         self.on_response_done = on_response_done
         self.on_repetition_detected = on_repetition_detected
         
-        # Track if we're using vision model
-        self._using_vision_model = False
-        
         # Initialize langchain ChatOpenAI client
         self.llm = ChatOpenAI(
             model=self.model,
@@ -140,7 +137,6 @@ class OmniOfflineClient:
         if new_model and new_model != self.model:
             logger.info(f"Switching model from {self.model} to {new_model}")
             self.model = new_model
-            self._using_vision_model = use_vision_config
             
             # 选择使用的 API 配置
             if use_vision_config:

@@ -165,13 +165,13 @@ async def analyze_screenshot_from_data_url(data_url: str) -> Optional[str]:
             return None
         
         if ',' not in data_url:
-            logger.error(f"无效的DataURL格式: 缺少base64分隔符")
+            logger.error("无效的DataURL格式: 缺少base64分隔符")
             return None
         
-        header, base64_data = data_url.split(',', 1)
+        _, base64_data = data_url.split(',', 1)
         
         if not base64_data:
-            logger.error(f"无效的DataURL格式: 缺少base64数据部分")
+            logger.error("无效的DataURL格式: 缺少base64数据部分")
             return None
         
         if len(base64_data) > MAX_BASE64_SIZE:
