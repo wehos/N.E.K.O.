@@ -599,6 +599,9 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
     """
     if not Modules.task_executor:
         raise HTTPException(503, "Task executor not ready")
+    # 当后端显式关闭用户插件功能时，直接拒绝调用，避免绕过前端开关
+    if not Modules.agent_flags.get("user_plugin_enabled", False):
+        raise HTTPException(403, "User plugin is disabled")
     plugin_id = (payload or {}).get("plugin_id")
     entry_id = (payload or {}).get("entry_id")
     raw_args = (payload or {}).get("args", {}) or {}
@@ -655,10 +658,8 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
             info["error"] = str(e)
             logger.error(f"[Plugin] Direct execute failed: {e}", exc_info=True)
 
-    task = asyncio.create_task(_run_plugin())
-    # Optional: keep a reference to avoid premature GC; if you add a tasks set, track here.
-    # Modules.background_tasks.add(task)
-    # task.add_done_callback(Modules.background_tasks.discard)
+    asyncio.create_task(_run_plugin())
+    # 如果未来需要集中管理后台插件任务，可将 Task 收集到 Modules 上的集合并在 done 后移除
     return {"success": True, "task_id": task_id, "status": info["status"], "start_time": info["start_time"]}
 
 

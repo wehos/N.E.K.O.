@@ -3368,15 +3368,32 @@ function init_app() {
                                     agentMcpCheckbox._autoDisabled = false;
                                     if (typeof agentMcpCheckbox._updateStyle === 'function') agentMcpCheckbox._updateStyle();
                                 }
-                                if (agentUserPluginCheckbox && !agentUserPluginCheckbox._processing && agentUserPluginCheckbox.checked !== (flags.user_plugin_enabled || false)) {
-                            console.log('[App] 同步用户插件开关状态:', flags.user_plugin_enabled);
-                            agentUserPluginCheckbox.checked = flags.user_plugin_enabled || false;
-                            agentUserPluginCheckbox._autoDisabled = true;
-                            agentUserPluginCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-                            agentUserPluginCheckbox._autoDisabled = false;
-                            if (typeof agentUserPluginCheckbox._updateStyle === 'function') agentUserPluginCheckbox._updateStyle();
+                            }
                         }
-                    }
+
+                        // 用户插件 flag 同步独立处理，避免依赖 MCP 分支
+                        if (agentUserPluginCheckbox && !agentUserPluginCheckbox._processing) {
+                            const flagEnabled = flags.user_plugin_enabled || false;
+                            const isAvailable = capabilityCheckFailed
+                                ? agentUserPluginCheckbox.checked
+                                : (capabilityResults['user_plugin_enabled'] !== false);
+                            const shouldBeChecked = flagEnabled && isAvailable;
+
+                            if (agentUserPluginCheckbox.checked !== shouldBeChecked) {
+                                if (shouldBeChecked) {
+                                    agentUserPluginCheckbox.checked = true;
+                                    agentUserPluginCheckbox._autoDisabled = true;
+                                    agentUserPluginCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+                                    agentUserPluginCheckbox._autoDisabled = false;
+                                    if (typeof agentUserPluginCheckbox._updateStyle === 'function') agentUserPluginCheckbox._updateStyle();
+                                } else if (!flagEnabled) {
+                                    agentUserPluginCheckbox.checked = false;
+                                    agentUserPluginCheckbox._autoDisabled = true;
+                                    agentUserPluginCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+                                    agentUserPluginCheckbox._autoDisabled = false;
+                                    if (typeof agentUserPluginCheckbox._updateStyle === 'function') agentUserPluginCheckbox._updateStyle();
+                                }
+                            }
                         }
                     }
                 } else {
