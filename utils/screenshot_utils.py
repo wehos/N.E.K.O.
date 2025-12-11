@@ -59,7 +59,7 @@ class ScreenshotUtils:
             # 获取核心API和辅助API配置
             core_api = core_config.get('CORE_API_TYPE', 'qwen')
             assist_api = core_config.get('assistApi', 'qwen')
-            enable_custom_api = core_config.get('enableCustomApi', False)
+            enable_custom_api = core_config.get('ENABLE_CUSTOM_API', False)
             
             logger.info(f"配置信息 - 核心API: {core_api}, 辅助API: {assist_api}, 自定义API: {enable_custom_api}")
             
@@ -71,9 +71,9 @@ class ScreenshotUtils:
                 logger.info("检测到自定义API已启用，尝试使用自定义视觉模型配置")
                 
                 # 开启自定义API：只使用自定义配置
-                vision_api_key = core_config.get('visionModelApiKey')
-                vision_base_url = core_config.get('visionModelUrl')
-                vision_model = core_config.get('visionModelId')
+                vision_api_key = core_config.get('VISION_MODEL_API_KEY')
+                vision_base_url = core_config.get('VISION_MODEL_URL')
+                vision_model = core_config.get('VISION_MODEL')
                 
                 logger.info(f"自定义API配置 - 密钥配置: {bool(vision_api_key)}, 端点: {vision_base_url}, 模型: {vision_model}")
                 
