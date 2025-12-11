@@ -598,7 +598,7 @@ class ConfigManager:
             DEFAULT_CORRECTION_MODEL,
             DEFAULT_EMOTION_MODEL,
             DEFAULT_VISION_MODEL,
-            DEFAULT_OMNI_MODEL,
+            DEFAULT_REALTIME_MODEL,
             DEFAULT_TTS_MODEL,
             DEFAULT_SUMMARY_MODEL_PROVIDER,
             DEFAULT_SUMMARY_MODEL_URL,
@@ -612,9 +612,9 @@ class ConfigManager:
             DEFAULT_VISION_MODEL_PROVIDER,
             DEFAULT_VISION_MODEL_URL,
             DEFAULT_VISION_MODEL_API_KEY,
-            DEFAULT_OMNI_MODEL_PROVIDER,
-            DEFAULT_OMNI_MODEL_URL,
-            DEFAULT_OMNI_MODEL_API_KEY,
+            DEFAULT_REALTIME_MODEL_PROVIDER,
+            DEFAULT_REALTIME_MODEL_URL,
+            DEFAULT_REALTIME_MODEL_API_KEY,
             DEFAULT_TTS_MODEL_PROVIDER,
             DEFAULT_TTS_MODEL_URL,
             DEFAULT_TTS_MODEL_API_KEY,
@@ -651,7 +651,7 @@ class ConfigManager:
             'COMPUTER_USE_GROUND_API_KEY': DEFAULT_COMPUTER_USE_GROUND_API_KEY,
             'IS_FREE_VERSION': False,
             'VISION_MODEL': DEFAULT_VISION_MODEL,
-            'OMNI_MODEL': DEFAULT_OMNI_MODEL,
+            'REALTIME_MODEL': DEFAULT_REALTIME_MODEL,
             'TTS_MODEL': DEFAULT_TTS_MODEL,
             'SUMMARY_MODEL_PROVIDER': DEFAULT_SUMMARY_MODEL_PROVIDER,
             'SUMMARY_MODEL_URL': DEFAULT_SUMMARY_MODEL_URL,
@@ -665,9 +665,9 @@ class ConfigManager:
             'VISION_MODEL_PROVIDER': DEFAULT_VISION_MODEL_PROVIDER,
             'VISION_MODEL_URL': DEFAULT_VISION_MODEL_URL,
             'VISION_MODEL_API_KEY': DEFAULT_VISION_MODEL_API_KEY,
-            'OMNI_MODEL_PROVIDER': DEFAULT_OMNI_MODEL_PROVIDER,
-            'OMNI_MODEL_URL': DEFAULT_OMNI_MODEL_URL,
-            'OMNI_MODEL_API_KEY': DEFAULT_OMNI_MODEL_API_KEY,
+            'REALTIME_MODEL_PROVIDER': DEFAULT_REALTIME_MODEL_PROVIDER,
+            'REALTIME_MODEL_URL': DEFAULT_REALTIME_MODEL_URL,
+            'REALTIME_MODEL_API_KEY': DEFAULT_REALTIME_MODEL_API_KEY,
             'TTS_MODEL_PROVIDER': DEFAULT_TTS_MODEL_PROVIDER,
             'TTS_MODEL_URL': DEFAULT_TTS_MODEL_URL,
             'TTS_MODEL_API_KEY': DEFAULT_TTS_MODEL_API_KEY,
@@ -837,24 +837,24 @@ class ConfigManager:
                 'fallback_type': 'assist',
             },
             'realtime': {
-                'custom_model': 'OMNI_MODEL',
-                'custom_url': 'OMNI_MODEL_URL',
-                'custom_key': 'OMNI_MODEL_API_KEY',
-                'default_model': 'OMNI_MODEL',
+                'custom_model': 'REALTIME_MODEL',
+                'custom_url': 'REALTIME_MODEL_URL',
+                'custom_key': 'REALTIME_MODEL_API_KEY',
+                'default_model': 'CORE_MODEL',
                 'fallback_type': 'core',  # 实时模型回退到核心API
             },
             'tts_default': {
                 'custom_model': 'TTS_MODEL',
                 'custom_url': 'TTS_MODEL_URL',
                 'custom_key': 'TTS_MODEL_API_KEY',
-                'default_model': 'TTS_MODEL',
+                'default_model': 'CORE_MODEL',
                 'fallback_type': 'core',  # 默认TTS回退到核心API
             },
             'tts_custom': {
                 'custom_model': 'TTS_MODEL',
                 'custom_url': 'TTS_MODEL_URL',
                 'custom_key': 'TTS_MODEL_API_KEY',
-                'default_model': 'TTS_MODEL',
+                'default_model': 'CORE_MODEL',
                 'fallback_type': 'assist',  # 自定义TTS回退到辅助API
             },
         }
@@ -882,6 +882,19 @@ class ConfigManager:
                     'api_type': 'local' if model_type == 'realtime' else None,
                 }
         
+        # 自定义音色(CosyVoice)的特殊回退逻辑：优先尝试用户保存的 Qwen Cosyvoice API，
+        # 只有在缺少 Qwen Cosyvoice API 时才再回退到辅助 API（CosyVoice 目前是唯一支持 voice clone 的）
+        if model_type == 'tts_custom':
+            qwen_api_key = (core_config.get('ASSIST_API_KEY_QWEN') or '').strip()
+            if qwen_api_key:
+                qwen_profile = get_assist_api_profiles().get('qwen', {})
+                return {
+                    'model': core_config.get(mapping['default_model'], ''), # Placeholder only, will be overridden by the actual model
+                    'api_key': qwen_api_key,
+                    'base_url': qwen_profile.get('OPENROUTER_URL', core_config.get('OPENROUTER_URL', '')), # Placeholder only, will be overridden by the actual url
+                    'is_custom': False,
+                }
+
         # 根据 fallback_type 回退到不同的 API
         if mapping['fallback_type'] == 'core':
             # 回退到核心 API 配置

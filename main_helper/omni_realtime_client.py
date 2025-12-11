@@ -265,7 +265,7 @@ class OmniRealtimeClient:
                 await self.update_session({
                     "instructions": instructions,
                     "modalities": ['text', 'audio'], # Step API只支持这一个模式
-                    "voice": self.voice if self.voice else "livelybreezy-female",
+                    "voice": self.voice if self.voice else "qingchunshaonv",
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "turn_detection": {
@@ -284,7 +284,7 @@ class OmniRealtimeClient:
                 await self.update_session({
                     "instructions": instructions,
                     "modalities": ['text', 'audio'], # Step API只支持这一个模式
-                    "voice": self.voice if self.voice else "livelybreezy-female",
+                    "voice": self.voice if self.voice else "qingchunshaonv",
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "turn_detection": {

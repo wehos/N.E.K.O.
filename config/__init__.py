@@ -44,12 +44,12 @@ DEFAULT_EMOTION_MODEL_API_KEY = ""
 DEFAULT_VISION_MODEL_PROVIDER = ""
 DEFAULT_VISION_MODEL_URL = ""
 DEFAULT_VISION_MODEL_API_KEY = ""
-DEFAULT_OMNI_MODEL_PROVIDER = ""
-DEFAULT_OMNI_MODEL_URL = ""
-DEFAULT_OMNI_MODEL_API_KEY = ""
-DEFAULT_TTS_MODEL_PROVIDER = ""
-DEFAULT_TTS_MODEL_URL = ""
-DEFAULT_TTS_MODEL_API_KEY = ""
+DEFAULT_REALTIME_MODEL_PROVIDER = "local" # 仅用于本地实时模型(语音+文字+图片)
+DEFAULT_REALTIME_MODEL_URL = "" # 仅用于本地实时模型(语音+文字+图片)
+DEFAULT_REALTIME_MODEL_API_KEY = "" # 仅用于本地实时模型(语音+文字+图片)
+DEFAULT_TTS_MODEL_PROVIDER = "" # 与Realtime对应的TTS模型(Native TTS)
+DEFAULT_TTS_MODEL_URL = "" # 与Realtime对应的TTS模型(Native TTS)
+DEFAULT_TTS_MODEL_API_KEY = "" # 与Realtime对应的TTS模型(Native TTS)
 DEFAULT_COMPUTER_USE_MODEL = ""  # 空字符串表示使用 assistApi 对应的视觉模型
 DEFAULT_COMPUTER_USE_MODEL_URL = ""  # 空字符串表示使用 assistApi 对应的 URL
 DEFAULT_COMPUTER_USE_MODEL_API_KEY = ""  # 空字符串表示使用 assistApi 对应的 API Key
@@ -59,7 +59,7 @@ DEFAULT_COMPUTER_USE_GROUND_API_KEY = ""  # 空字符串表示使用 assistApi �
 
 # 模型配置常量（默认值）
 # 注：以下5个直接被导入使用的变量保留原名以保持向后兼容性
-DEFAULT_ROUTER_MODEL = ROUTER_MODEL = 'openai/gpt-4.1'
+DEFAULT_ROUTER_MODEL = ROUTER_MODEL = 'qwen-plus'
 DEFAULT_SETTING_PROPOSER_MODEL = SETTING_PROPOSER_MODEL = "qwen-max"
 DEFAULT_SETTING_VERIFIER_MODEL = SETTING_VERIFIER_MODEL = "qwen-max"
 DEFAULT_SEMANTIC_MODEL = SEMANTIC_MODEL = 'text-embedding-v4'
@@ -68,12 +68,12 @@ DEFAULT_RERANKER_MODEL = RERANKER_MODEL = 'qwen-plus'
 # 其他模型配置（仅通过 config_manager 动态获取）
 DEFAULT_SUMMARY_MODEL = "qwen-plus"
 DEFAULT_CORRECTION_MODEL = 'qwen-max'
-DEFAULT_EMOTION_MODEL = 'qwen-turbo'
+DEFAULT_EMOTION_MODEL = 'qwen-flash'
 DEFAULT_VISION_MODEL = "qwen3-vl-plus-2025-09-23"
 
 # 用户自定义模型配置（可选，暂未使用）
-DEFAULT_OMNI_MODEL = ""  # 全模态模型(语音+文字+图片)
-DEFAULT_TTS_MODEL = ""   # TTS模型(Native TTS)
+DEFAULT_REALTIME_MODEL = "Qwen3-Omni-30B-A3B-Instruct"  # 全模态模型(语音+文字+图片)
+DEFAULT_TTS_MODEL = "Qwen3-Omni-30B-A3B-Instruct"   # 与Realtime对应的TTS模型(Native TTS)
 
 
 CONFIG_FILES = [
@@ -126,7 +126,7 @@ DEFAULT_VOICE_STORAGE = {}
 # 默认API配置（供 utils.api_config_loader 作为回退选项使用）
 DEFAULT_CORE_API_PROFILES = {
     'free': {
-        'CORE_URL': "ws://47.100.209.206:9805",
+        'CORE_URL': "wss://lanlan.tech/core",
         'CORE_MODEL': "free-model",
         'CORE_API_KEY': "free-access",
         'IS_FREE_VERSION': True,
@@ -151,7 +151,7 @@ DEFAULT_CORE_API_PROFILES = {
 
 DEFAULT_ASSIST_API_PROFILES = {
     'free': {
-        'OPENROUTER_URL': "http://47.100.209.206:9807/v1",
+        'OPENROUTER_URL': "https://lanlan.tech/text/v1",
         'SUMMARY_MODEL': "free-model",
         'CORRECTION_MODEL': "free-model",
         'EMOTION_MODEL': "free-model",
@@ -296,7 +296,7 @@ __all__ = [
     'DEFAULT_CORRECTION_MODEL',
     'DEFAULT_EMOTION_MODEL',
     'DEFAULT_VISION_MODEL',
-    'DEFAULT_OMNI_MODEL',
+    'DEFAULT_REALTIME_MODEL',
     'DEFAULT_TTS_MODEL',
     # 用户自定义模型配置的 Provider/URL/API_KEY
     'DEFAULT_SUMMARY_MODEL_PROVIDER',
@@ -311,9 +311,9 @@ __all__ = [
     'DEFAULT_VISION_MODEL_PROVIDER',
     'DEFAULT_VISION_MODEL_URL',
     'DEFAULT_VISION_MODEL_API_KEY',
-    'DEFAULT_OMNI_MODEL_PROVIDER',
-    'DEFAULT_OMNI_MODEL_URL',
-    'DEFAULT_OMNI_MODEL_API_KEY',
+    'DEFAULT_REALTIME_MODEL_PROVIDER',
+    'DEFAULT_REALTIME_MODEL_URL',
+    'DEFAULT_REALTIME_MODEL_API_KEY',
     'DEFAULT_TTS_MODEL_PROVIDER',
     'DEFAULT_TTS_MODEL_URL',
     'DEFAULT_TTS_MODEL_API_KEY',

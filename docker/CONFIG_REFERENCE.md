@@ -93,7 +93,7 @@
 
 | 配置项 | 代码常量 | 默认值 | 状态 |
 |-------|---------|--------|------|
-| 全模态模型 | `DEFAULT_OMNI_MODEL` | `""` | 暂未使用 |
+| 全模态模型 | `DEFAULT_REALTIME_MODEL` | `""` | 暂未使用 |
 | TTS 模型 | `DEFAULT_TTS_MODEL` | `""` | 暂未使用 |
 
 ### 6. API 提供商详细配置
@@ -174,7 +174,7 @@ Computer Use 会根据 `assistApi` 自动选择对应提供商的视觉模型：
 | `CORRECTION_MODEL_*` | 纠错模型 | PROVIDER, URL, API_KEY |
 | `EMOTION_MODEL_*` | 情感模型 | PROVIDER, URL, API_KEY |
 | `VISION_MODEL_*` | 视觉模型 | PROVIDER, URL, API_KEY |
-| `OMNI_MODEL_*` | 全模态模型 | PROVIDER, URL, API_KEY |
+| `REALTIME_MODEL_*` | 实时模型 | PROVIDER, URL, API_KEY |
 | `TTS_MODEL_*` | TTS 模型 | PROVIDER, URL, API_KEY |
 
 ## 🔄 配置优先级

@@ -805,9 +805,13 @@ function init_app() {
                 return await navigator.mediaDevices.getUserMedia(attempt.constraints);
             } catch (err) {
                 console.warn(`${attempt.label} failed →`, err);
-                showStatusToast(err.toString(), 4000);
-                throw err;
+                lastError = err;
             }
+        }
+
+        if (lastError) {
+            showStatusToast(err.toString(), 4000);
+            throw lastError;
         }
     }
 
