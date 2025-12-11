@@ -16,12 +16,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 from utils.frontend_utils import contains_chinese, replace_blank, replace_corner_mark, remove_bracket, \
     is_only_punctuation, split_paragraph
 from utils.audio import make_wav_header
+from utils.screenshot_utils import ScreenshotUtils
 from main_helper.omni_realtime_client import OmniRealtimeClient
 from main_helper.omni_offline_client import OmniOfflineClient
 from main_helper.tts_helper import get_tts_worker
 import base64
-from io import BytesIO
-from PIL import Image
 from config import MEMORY_SERVER_PORT
 from utils.config_manager import get_config_manager
 from multiprocessing import Process, Queue as MPQueue
@@ -64,6 +63,9 @@ class LLMSessionManager:
         self.lanlan_name = lanlan_name
         # 获取角色相关配置
         self._config_manager = get_config_manager()
+        
+        # 初始化屏幕分享工具
+        self.screenshot_utils = ScreenshotUtils()
 
         (
             self.master_name,
@@ -989,7 +991,7 @@ class LLMSessionManager:
             if incremental_cache:
                 final_prime_text = f"SYSTEM_MESSAGE | " + self._convert_cache_to_str(incremental_cache)
             else:  # Ensure session cycles a turn even if no incremental cache
-                logger.error(f"💥 Unexpected: No incremental cache found. {len(self.message_cache_for_new_session)}, {self.initial_cache_snapshot_len}")
+                logger.info(f"🔄 No incremental cache found. 缓存长度: {len(self.message_cache_for_new_session)}, 快照长度: {self.initial_cache_snapshot_len}")
                 final_prime_text = f"SYSTEM_MESSAGE | 系统自动报时，当前时间： " + str(datetime.now().strftime("%Y-%m-%d %H:%M"))
 
             # 若存在需要植入的额外提示，则指示模型忽略上一条消息，并在下一次响应中统一向用户补充这些提示
@@ -1019,7 +1021,7 @@ class LLMSessionManager:
 
             # 2. Start temporary listener for PENDING session's *second* ignored response
             if self.pending_session_final_prime_complete_event:
-                self.pending_session_final_prime_complete_event.is_set()
+                self.pending_session_final_prime_complete_event.set()
 
             # --- PERFORM ACTUAL HOT SWAP ---
             logger.info("Final Swap Sequence: Starting actual session swap...")
@@ -1257,20 +1259,11 @@ class LLMSessionManager:
 
             elif input_type in ['screen', 'camera']:
                 try:
-                    if isinstance(data, str) and data.startswith('data:image/jpeg;base64,'):
-                        img_data = data.split(',')[1]
-                        img_bytes = base64.b64decode(img_data)
-                        # Resize to 480p (height=480, keep aspect ratio)
-                        image = Image.open(BytesIO(img_bytes))
-                        w, h = image.size
-                        new_h = 480
-                        new_w = int(w * (new_h / h))
-                        image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                        buffer = BytesIO()
-                        image.save(buffer, format='JPEG')
-                        buffer.seek(0)
-                        resized_bytes = buffer.read()
-                        resized_b64 = base64.b64encode(resized_bytes).decode('utf-8')
+                    # 使用统一的屏幕分享工具处理数据
+                    result = await self.screenshot_utils.process_screen_data(data)
+                    
+                    if result:
+                        resized_b64, img_bytes = result
                         
                         # 如果是文本模式（OmniOfflineClient），只存储图片，不立即发送
                         if isinstance(self.session, OmniOfflineClient):
@@ -1287,11 +1280,10 @@ class LLMSessionManager:
                             # 语音模式直接发送图片
                             await self.session.stream_image(resized_b64)
                     else:
-                        logger.error(f"💥 Stream: Invalid screen data format.")
+                        logger.error(f"💥 Stream: 屏幕数据处理失败")
                         return
-                except ValueError as ve:
-                    logger.error(f"💥 Stream: Base64 decoding error (screen): {ve}")
-                    return
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"💥 Stream: Error processing screen data: {e}")
                     return

@@ -10,6 +10,10 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
 
     // 移除当前模型
     if (this.currentModel) {
+        // 关闭所有已打开的设置窗口（防御性检查）
+        if (window.closeAllSettingsWindows) {
+            window.closeAllSettingsWindows();
+        }
         // 清除保存参数的定时器
         if (this._savedParamsTimer) {
             clearInterval(this._savedParamsTimer);

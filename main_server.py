@@ -40,9 +40,13 @@ import webbrowser
 import io
 import threading
 import time
+from typing import Optional
 from urllib.parse import quote, unquote
 from steamworks.exceptions import SteamNotLoadedException
 from steamworks.enums import EWorkshopFileType, EItemUpdateStatus
+import base64
+import tempfile
+from utils.screenshot_utils import ScreenshotUtils, analyze_screenshot_from_data_url
 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Body
@@ -63,6 +67,8 @@ import pathlib, wave
 from openai import AsyncOpenAI
 from config import MAIN_SERVER_PORT, MONITOR_SERVER_PORT, MEMORY_SERVER_PORT, MODELS_WITH_EXTRA_BODY, TOOL_SERVER_PORT,USER_PLUGIN_SERVER_PORT
 from config.prompts_sys import emotion_analysis_prompt, proactive_chat_prompt
+from config import MAIN_SERVER_PORT, MONITOR_SERVER_PORT, MEMORY_SERVER_PORT, MODELS_WITH_EXTRA_BODY, TOOL_SERVER_PORT
+from config.prompts_sys import emotion_analysis_prompt, proactive_chat_prompt, proactive_chat_prompt_screenshot
 import glob
 from utils.config_manager import get_config_manager
 # 导入创意工坊工具模块
@@ -150,6 +156,9 @@ if _IS_MAIN_PROCESS:
     get_default_steam_info()
 else:
     steamworks = None
+
+
+# 使用真实的截图库，函数已从utils.screenshot_utils导入
 
 
 # Configure logging (子进程静默初始化，避免重复打印初始化消息)
@@ -402,6 +411,7 @@ if _IS_MAIN_PROCESS:
     if os.path.exists(user_mod_path) and os.path.isdir(user_mod_path):
         app.mount("/user_mods", CustomStaticFiles(directory=user_mod_path), name="user_mods")
         logger.info(f"已挂载用户mod路径: {user_mod_path}")
+
 # 使用 FastAPI 的 app.state 来管理启动配置
 def get_start_config():
     """从 app.state 获取启动配置"""
@@ -1133,7 +1143,7 @@ async def notify_task_result(request: Request):
 
 @app.post('/api/proactive_chat')
 async def proactive_chat(request: Request):
-    """主动搭话：爬取热门内容，让AI决定是否主动发起对话"""
+    """主动搭话：根据概率选择使用图片或热门内容，让AI决定是否主动发起对话"""
     try:
         from utils.web_scraper import fetch_trending_content, format_trending_content
         
@@ -1158,27 +1168,62 @@ async def proactive_chat(request: Request):
         
         logger.info(f"[{lanlan_name}] 开始主动搭话流程...")
         
-        # 1. 爬取热门内容
-        try:
-            trending_content = await fetch_trending_content(bilibili_limit=10, weibo_limit=10)
+        # 1. 检查前端是否发送了截图数据
+        screenshot_data = data.get('screenshot_data')
+        # 防御性检查：确保screenshot_data是字符串类型
+        has_screenshot = bool(screenshot_data) and isinstance(screenshot_data, str)
+        
+        # 前端已经根据三种模式决定是否使用截图
+        use_screenshot = has_screenshot
+        
+        if use_screenshot:
+            logger.info(f"[{lanlan_name}] 前端选择使用截图进行主动搭话")
             
-            if not trending_content['success']:
+            # 处理前端发送的截图数据
+            try:
+                # 将DataURL转换为base64数据并分析
+                screenshot_content = await analyze_screenshot_from_data_url(screenshot_data)
+                if not screenshot_content:
+                    logger.warning(f"[{lanlan_name}] 截图分析失败，跳过本次搭话")
+                    return JSONResponse({
+                        "success": False,
+                        "error": "截图分析失败，请检查截图格式是否正确",
+                        "action": "pass"
+                    }, status_code=500)
+                else:
+                    logger.info(f"[{lanlan_name}] 成功分析截图内容")
+            except (ValueError, TypeError) as e:
+                logger.exception(f"[{lanlan_name}] 处理截图数据失败")
                 return JSONResponse({
                     "success": False,
-                    "error": "无法获取热门内容",
-                    "detail": trending_content.get('error', '未知错误')
+                    "error": f"截图处理失败: {str(e)}",
+                    "action": "pass"
                 }, status_code=500)
-            
-            formatted_content = format_trending_content(trending_content)
-            logger.info(f"[{lanlan_name}] 成功获取热门内容")
-            
-        except Exception as e:
-            logger.error(f"[{lanlan_name}] 获取热门内容失败: {e}")
-            return JSONResponse({
-                "success": False,
-                "error": "爬取热门内容时出错",
-                "detail": str(e)
-            }, status_code=500)
+        else:
+            logger.info(f"[{lanlan_name}] 前端选择使用热门内容进行主动搭话")
+        
+        if not use_screenshot:
+            # 热门内容主动对话
+            try:
+                trending_content = await fetch_trending_content(bilibili_limit=10, weibo_limit=10)
+                
+                if not trending_content['success']:
+                    return JSONResponse({
+                        "success": False,
+                        "error": "无法获取热门内容",
+                        "detail": trending_content.get('error', '未知错误')
+                    }, status_code=500)
+                
+                formatted_content = format_trending_content(trending_content)
+                logger.info(f"[{lanlan_name}] 成功获取热门内容")
+                
+            except Exception:
+                logger.exception(f"[{lanlan_name}] 获取热门内容失败")
+                return JSONResponse({
+                    "success": False,
+                    "error": "爬取热门内容时出错",
+                    "detail": "请检查网络连接或热门内容服务状态"
+                }, status_code=500)
         
         # 2. 获取new_dialogue prompt
         try:
@@ -1189,13 +1234,25 @@ async def proactive_chat(request: Request):
             logger.warning(f"[{lanlan_name}] 获取记忆上下文失败，使用空上下文: {e}")
             memory_context = ""
         
-        # 3. 构造提示词（使用prompts_sys中的模板）
-        system_prompt = proactive_chat_prompt.format(
-            lanlan_name=lanlan_name,
-            master_name=master_name_current,
-            trending_content=formatted_content,
-            memory_context=memory_context
-        )
+        # 3. 构造提示词（根据选择使用不同的模板）
+        if use_screenshot:
+            # 截图模板：基于屏幕内容让AI决定是否主动发起对话
+            system_prompt = proactive_chat_prompt_screenshot.format(
+                lanlan_name=lanlan_name,
+                master_name=master_name_current,
+                screenshot_content=screenshot_content,
+                memory_context=memory_context
+            )
+            logger.info(f"[{lanlan_name}] 使用图片主动对话提示词")
+        else:
+            # 热门内容模板：基于网络热点让AI决定是否主动发起对话
+            system_prompt = proactive_chat_prompt.format(
+                lanlan_name=lanlan_name,
+                master_name=master_name_current,
+                trending_content=formatted_content,
+                memory_context=memory_context
+            )
+            logger.info(f"[{lanlan_name}] 使用热门内容主动对话提示词")
 
         # 4. 直接使用langchain ChatOpenAI获取AI回复（不创建临时session）
         try:
@@ -1215,7 +1272,8 @@ async def proactive_chat(request: Request):
             )
             
             # 发送请求获取AI决策 - Retry策略：重试2次，间隔1秒、2秒
-            print(system_prompt)
+            # 如需调试，可在此处使用 logger.debug 并适当截断 system_prompt
+            # logger.debug(f"[{lanlan_name}] proactive system_prompt: {system_prompt[:200]}...")
             max_retries = 3
             retry_delays = [1, 2]
             response_text = ""

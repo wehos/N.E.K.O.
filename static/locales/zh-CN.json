@@ -692,6 +692,7 @@
     "toggles": {
       "allowInterrupt": "允许打断",
       "proactiveChat": "主动搭话",
+      "proactiveVision": "主动视觉",
       "agentMaster": "Agent总开关",
       "keyboardControl": "键鼠控制",
       "userPlugin": "用户插件",
