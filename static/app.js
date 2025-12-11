@@ -4516,11 +4516,19 @@ function init_app(){
                 const screenshotDataUrl = await captureProactiveChatScreenshot();
                 
                 if (!screenshotDataUrl) {
-                    console.log('主动搭话截图失败，跳过本次搭话');
-                    return;
+                    console.log('主动搭话截图失败，退回使用热门内容搭话');
+                    // 截图失败时，如果主动搭话功能开启，则退回使用热门内容
+                    if (proactiveChatEnabled) {
+                        useScreenshot = false;
+                        console.log('已切换到热门内容搭话模式');
+                    } else {
+                        // 如果只开启了主动视觉，没有开启主动搭话，则跳过本次搭话
+                        console.log('主动视觉截图失败且未开启主动搭话，跳过本次搭话');
+                        return;
+                    }
+                } else {
+                    requestBody.screenshot_data = screenshotDataUrl;
                 }
-                
-                requestBody.screenshot_data = screenshotDataUrl;
             }
             
             const response = await fetch('/api/proactive_chat', {
