@@ -217,12 +217,12 @@ Lanlan/
 │   ├── core_config.json         # 核心配置（API Key等）
 │   ├── prompts_chara.py         # 角色提示词
 │   └── prompts_sys.py           # 系统提示词
-├── 📁 main_helper/              # 🔧 核心模块
+├── 📁 main_logic/              # 🔧 核心模块
 │   ├── core.py                  # 核心对话模块
 │   ├── cross_server.py         # 跨服务器通信
 │   ├── omni_realtime_client.py  # 实时API客户端（Relatime API）
 │   ├── omni_offline_client.py  # 文本API客户端（Response API）
-│   └── tts_helper.py            # 🔊 TTS引擎适配器
+│   └── tts_client.py            # 🔊 TTS引擎适配器
 ├── 📁 memory/                   # 🧠 记忆管理系统
 │   ├── store/                   # 记忆数据存储
 ├── 📁 static/                   # 🌐 前端静态资源

@@ -51,7 +51,7 @@ from utils.screenshot_utils import analyze_screenshot_from_data_url
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Body
 from fastapi.staticfiles import StaticFiles
-from main_helper import core as core, cross_server as cross_server
+from main_logic import core as core, cross_server as cross_server
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from urllib.parse import unquote
@@ -2263,7 +2263,7 @@ async def get_catgirl_voice_mode_status(name: str):
     is_voice_mode = False
     if is_active and mgr:
         # 检查是否是语音模式（通过session类型判断）
-        from main_helper.omni_realtime_client import OmniRealtimeClient
+        from main_logic.omni_realtime_client import OmniRealtimeClient
         is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
     
     return JSONResponse({
@@ -2292,7 +2292,7 @@ async def set_current_catgirl(request: Request):
         mgr = session_manager[old_catgirl]
         if mgr.is_active:
             # 检查是否是语音模式（通过session类型判断）
-            from main_helper.omni_realtime_client import OmniRealtimeClient
+            from main_logic.omni_realtime_client import OmniRealtimeClient
             is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
             
             if is_voice_mode:
@@ -3120,7 +3120,7 @@ async def rename_catgirl(old_name: str, request: Request):
         mgr = session_manager[old_name]
         if mgr.is_active:
             # 检查是否是语音模式（通过session类型判断）
-            from main_helper.omni_realtime_client import OmniRealtimeClient
+            from main_logic.omni_realtime_client import OmniRealtimeClient
             is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
             
             if is_voice_mode:

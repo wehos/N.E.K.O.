@@ -128,12 +128,12 @@ Lanlan/
 │   ├── core_config.json         # コア設定（API Keyなど）
 │   ├── prompts_chara.py         # キャラクタープロンプト
 │   └── prompts_sys.py           # システムプロンプト
-├── 📁 main_helper/              # 🔧 コアモジュール
+├── 📁 main_logic/              # 🔧 コアモジュール
 │   ├── core.py                  # コア対話モジュール
 │   ├── cross_server.py         # クロスサーバー通信
 │   ├── omni_realtime_client.py  # リアルタイムAPIクライアント
 │   ├── omni_offline_client.py  # テキストAPIクライアント
-│   └── tts_helper.py            # 🔊 TTSエンジンアダプター
+│   └── tts_client.py            # 🔊 TTSエンジンアダプター
 ├── 📁 memory/                   # 🧠 記憶管理システム
 │   ├── store/                   # 記憶データストレージ
 ├── 📁 static/                   # 🌐 フロントエンド静的リソース

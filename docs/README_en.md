@@ -128,12 +128,12 @@ Lanlan/
 │   ├── core_config.json         # Core configuration (API Keys, etc.)
 │   ├── prompts_chara.py         # Character prompts
 │   └── prompts_sys.py           # System prompts
-├── 📁 main_helper/              # 🔧 Core modules
+├── 📁 main_logic/              # 🔧 Core modules
 │   ├── core.py                  # Core dialogue module
 │   ├── cross_server.py         # Cross-server communication
 │   ├── omni_realtime_client.py  # Realtime API client
 │   ├── omni_offline_client.py  # Text API client
-│   └── tts_helper.py            # 🔊 TTS engine adapter
+│   └── tts_client.py            # 🔊 TTS engine adapter
 ├── 📁 memory/                   # 🧠 Memory management system
 │   ├── store/                   # Memory data storage
 ├── 📁 static/                   # 🌐 Frontend static resources

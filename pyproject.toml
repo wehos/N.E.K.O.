@@ -43,7 +43,7 @@ dependencies = [
 packages = [
   "brain",
   "config",
-  "main_helper",
+  "main_logic",
   "memory",
   "utils",
 ]
@@ -52,7 +52,7 @@ packages = [
 include = [
   "brain",
   "config",
-  "main_helper",
+  "main_logic",
   "memory",
   "utils",
   "static",

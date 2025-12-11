@@ -11,7 +11,7 @@ hiddenimports = []
 
 # 收集关键包的所有内容（根据实际 import 检查）
 critical_packages = [
-    'dashscope',         # main_helper 使用
+    'dashscope',         # main_logic 使用
     'openai',            # langchain_openai 需要
     'langchain',         # brain 和 memory 使用
     'langchain_community',
@@ -149,13 +149,13 @@ hiddenimports += [
     'brain.deduper',
     'brain.mcp_client',
     
-    # main_helper 子模块
-    'main_helper',
-    'main_helper.core',
-    'main_helper.cross_server',
-    'main_helper.omni_offline_client',
-    'main_helper.omni_realtime_client',
-    'main_helper.tts_helper',
+    # main_logic 子模块
+    'main_logic',
+    'main_logic.core',
+    'main_logic.cross_server',
+    'main_logic.omni_offline_client',
+    'main_logic.omni_realtime_client',
+    'main_logic.tts_client',
     
     # memory 子模块
     'memory',
