@@ -806,7 +806,7 @@ function init_app() {
             } catch (err) {
                 console.warn(`${attempt.label} failed →`, err);
                 showStatusToast(err.toString(), 4000);
-                return err;
+                throw err;
             }
         }
     }
@@ -829,14 +829,13 @@ function init_app() {
             if (audioPlayerContext.state === 'suspended') {
                 await audioPlayerContext.resume();
             }
-            let captureStream;
 
             if (screenCaptureStream == null) {
                 if (isMobile()) {
                     // 移动端使用摄像头
                     const tmp = await getMobileCameraStream();
                     if (tmp instanceof MediaStream) {
-                        captureStream = tmp;
+                        screenCaptureStream = tmp;
                     } else {
                         // 保持原有错误处理路径：让 catch 去接手
                         throw (tmp instanceof Error ? tmp : new Error('无法获取摄像头流'));
@@ -1704,7 +1703,7 @@ function init_app() {
             showStatusToast(errorMsg, 5000);
         } finally {
             // 确保流被正确关闭，防止资源泄漏
-            if (captureStream) {
+            if (captureStream instanceof MediaStream) {
                 captureStream.getTracks().forEach(track => track.stop());
             }
             // 重新启用截图按钮

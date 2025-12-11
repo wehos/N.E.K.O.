@@ -89,7 +89,8 @@ class OmniOfflineClient:
             base_url=self.base_url,
             api_key=self.api_key,
             temperature=1.0,
-            streaming=True
+            streaming=True,
+            extra_body={"enable_thinking": False} if self.model in MODELS_WITH_EXTRA_BODY else None
         )
         
         # State management
