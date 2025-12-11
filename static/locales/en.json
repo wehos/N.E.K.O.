@@ -302,8 +302,7 @@
       "title": "⚠️ Important Notice",
       "message": "Detected that you are changing API Key. Please note the following:",
       "voiceIdBinding": "Voice ID is bound to your API Key. All registered Voice IDs will become invalid after changing API Key",
-      "voiceIdCleared": "The system will automatically clear locally saved Voice ID records after you save the new API Key",
-      "reRegisterVoice": "It is recommended to re-register the required voices after changing API Key",
+      "reRegisterVoice": "You may need to re-register the required voices after changing API Key",
       "cancel": "Cancel",
       "continue": "Continue Saving"
     },
@@ -311,15 +310,15 @@
     "correctionModelConfig": "✏️ Correction Model Configuration",
     "emotionModelConfig": "😊 Emotion Model Configuration",
     "visionModelConfig": "👁️ Vision Model Configuration",
-    "omniModelConfig": "🌐 Omni Model Configuration",
-    "ttsModelConfig": "🔊 TTS Model Configuration",
+    "realtimeModelConfig": "🎙️ Realtime API (Local Mode)",
+    "ttsModelConfig": "🔊 TTS Model Configuration (Duplex Streaming)",
     "provider": "Provider",
     "apiUrl": "API URL",
     "apiKey": "API Key",
     "modelId": "Model ID",
-    "providerPlaceholder": "e.g., openai, azure, custom",
+    "providerPlaceholder": "e.g., openai, azure, local",
     "apiUrlPlaceholder": "e.g., https://api.openai.com/v1/chat/completions",
-    "modelIdPlaceholder": "e.g., gpt-3.5-turbo, qwen-turbo",
+    "modelIdPlaceholder": "e.g., gpt-5.1-chat, qwen-flash",
     "summaryModelApiKeyPlaceholder": "Please enter Summary Model API Key",
     "correctionModelApiKeyPlaceholder": "Please enter Correction Model API Key",
     "emotionModelApiKeyPlaceholder": "Please enter Emotion Model API Key",
@@ -339,12 +338,32 @@
     "customApiEnabledHint": "(Custom API Enabled)",
     "customApiConfig": "Custom API Configuration",
     "customApiDescription": "💡 Custom API Description:",
-    "customApiDescriptionText": "These APIs are used for specific functional modules, such as summary generation, text correction, sentiment analysis, visual recognition, full-modal dialogue, and speech synthesis. Each API requires separate configuration for vendor, URL, model ID, and API Key.",
-    "customApiWarning": "⚠️ Note: After enabling custom APIs, core APIs and auxiliary APIs will be disabled and cannot be modified.",
+    "customApiDescriptionText": "These APIs are used for specific functional modules, such as summary generation, text correction, sentiment analysis, visual recognition, realtime dialogue, and speech synthesis. Each API requires separate configuration for vendor, URL, model ID, and API Key.",
+    "customApiWarning": "⚠️ Note: After enabling custom APIs, core APIs and auxiliary APIs will be partially overwritten.",
     "enableCustomApi": "Enable Custom API Configuration",
-    "enableCustomApiNote": "After enabling, custom API configuration will be used, disabling modifications to core APIs and auxiliary APIs",
+    "enableCustomApiNote": "After enabling, custom API configuration will be used, partially overwrite core APIs and auxiliary APIs",
     "loadProvidersFailed": "Failed to load API provider options, please refresh the page and try again",
-    "saveFailed": "Save failed: {{error}}"
+    "saveFailed": "Save failed: {{error}}",
+    "realtimeWarning": {
+      "title": "⚠️ Important Notice:",
+      "localModeOnly": "• Realtime API is only for Local mode (local voice conversation)",
+      "wsProtocol": "• URL must use WebSocket protocol (starting with ws:// or wss://)",
+      "autoSwitchLocal": "• After configuration, the core API type will automatically switch to \"local\""
+    },
+    "ttsWarning": {
+      "title": "⚠️ Important Notice:",
+      "duplexStreaming": "• TTS API must support duplex streaming (full-duplex real-time speech synthesis)",
+      "wsProtocol": "• URL must use WebSocket protocol (starting with ws:// or wss://)",
+      "cosyVoiceOnly": "• Currently only supports Alibaba Cloud CosyVoice compatible protocol format"
+    },
+    "wsWarning": {
+      "title": "⚠️ Protocol Error",
+      "message": "URL must use WebSocket protocol (starting with ws:// or wss://)",
+      "messageWithType": "<strong>{{apiType}}</strong> URL must use WebSocket protocol (starting with ws:// or wss://)",
+      "correctExamples": "Correct examples:",
+      "wrongExamples": "Wrong examples:",
+      "confirm": "I understand"
+    }
   },
   "live2d": {
     "manager": "Live2D Model Manager",

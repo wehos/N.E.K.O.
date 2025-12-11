@@ -302,8 +302,7 @@
       "title": "⚠️ 重要提醒",
       "message": "检测到您正在更换 API Key，请注意以下事项：",
       "voiceIdBinding": "Voice ID 与您的 API Key 绑定，更换 API Key 后所有已注册的 Voice ID 将失效",
-      "voiceIdCleared": "系统会在您保存新的 API Key 后自动清除本地保存的 Voice ID 记录",
-      "reRegisterVoice": "建议在更换 API Key 后重新注册所需的音色",
+      "reRegisterVoice": "您可能需要在更换 API Key 后重新注册所需的音色",
       "cancel": "取消",
       "continue": "继续保存"
     },
@@ -311,15 +310,15 @@
     "correctionModelConfig": "✏️ 纠错模型配置",
     "emotionModelConfig": "😊 情感模型配置",
     "visionModelConfig": "👁️ 视觉模型配置",
-    "omniModelConfig": "🌐 全模态模型配置",
-    "ttsModelConfig": "🔊 TTS模型配置",
+    "realtimeModelConfig": "🎙️ Realtime API（Local模式）",
+    "ttsModelConfig": "🔊 TTS模型配置（双工流式）",
     "provider": "供应商",
     "apiUrl": "API URL",
     "apiKey": "API Key",
     "modelId": "模型ID",
-    "providerPlaceholder": "如：openai、azure、custom",
+    "providerPlaceholder": "如：openai、azure、local",
     "apiUrlPlaceholder": "如：https://api.openai.com/v1/chat/completions",
-    "modelIdPlaceholder": "如：gpt-3.5-turbo、qwen-turbo",
+    "modelIdPlaceholder": "如：gpt-5.1-chat、qwen-flash",
     "summaryModelApiKeyPlaceholder": "请输入摘要模型的API Key",
     "correctionModelApiKeyPlaceholder": "请输入纠错模型的API Key",
     "emotionModelApiKeyPlaceholder": "请输入情感模型的API Key",
@@ -339,12 +338,32 @@
     "customApiEnabledHint": "（自定义API已启用）",
     "customApiConfig": "自定义API配置",
     "customApiDescription": "💡 自定义API说明：",
-    "customApiDescriptionText": "这些API用于特定的功能模块，如摘要生成、文本纠错、情感分析、视觉识别、全模态对话和语音合成。每个API都需要单独配置供应商、URL、模型ID和API Key。",
-    "customApiWarning": "⚠️ 注意：启用自定义API后，核心API和辅助API将被禁用且无法修改。",
+    "customApiDescriptionText": "这些API用于特定的功能模块，如摘要生成、文本纠错、情感分析、视觉识别、实时对话和语音合成。每个API都需要单独配置供应商、URL、模型ID和API Key。",
+    "customApiWarning": "⚠️ 注意：启用自定义API后，核心API和辅助API将被部分覆盖。",
     "enableCustomApi": "启用自定义API配置",
-    "enableCustomApiNote": "启用后将使用自定义API配置，禁用核心API和辅助API的修改",
+    "enableCustomApiNote": "启用后将使用自定义API配置，部分覆盖核心API和辅助API的配置",
     "loadProvidersFailed": "加载API服务商选项失败，请刷新页面重试",
-    "saveFailed": "保存失败: {{error}}"
+    "saveFailed": "保存失败: {{error}}",
+    "realtimeWarning": {
+      "title": "⚠️ 重要提示：",
+      "localModeOnly": "• Realtime API 仅用于 Local 模式（本地语音对话）",
+      "wsProtocol": "• URL 必须使用 WebSocket 协议（以 ws:// 或 wss:// 开头）",
+      "autoSwitchLocal": "• 配置后，核心 API 类型将自动切换为 \"local\""
+    },
+    "ttsWarning": {
+      "title": "⚠️ 重要提示：",
+      "duplexStreaming": "• TTS API 必须支持双工流式（全双工实时语音合成）",
+      "wsProtocol": "• URL 必须使用 WebSocket 协议（以 ws:// 或 wss:// 开头）",
+      "cosyVoiceOnly": "• 目前仅支持阿里云 CosyVoice 兼容的协议格式"
+    },
+    "wsWarning": {
+      "title": "⚠️ 协议错误",
+      "message": "URL 必须使用 WebSocket 协议（以 ws:// 或 wss:// 开头）",
+      "messageWithType": "<strong>{{apiType}}</strong> 的 URL 必须使用 WebSocket 协议（以 ws:// 或 wss:// 开头）",
+      "correctExamples": "正确示例：",
+      "wrongExamples": "错误示例：",
+      "confirm": "我知道了"
+    }
   },
   "live2d": {
     "manager": "Live2D 模型管理",
