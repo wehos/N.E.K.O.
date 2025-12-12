@@ -109,7 +109,7 @@ def find_preview_image_in_folder(folder_path):
 
 
 @router.get('/api/steam/workshop/subscribed-items')
-async def get_subscribed_workshop_items():
+def get_subscribed_workshop_items():
     """
     获取用户订阅的Steam创意工坊物品列表
     返回包含物品ID、基本信息和状态的JSON数据
@@ -252,15 +252,15 @@ async def get_subscribed_workshop_items():
                     
                     if query_handle:
                         # Define a callback for UGC query completion
-                        def ugc_query_callback(result):
-                            logger.debug(f"UGC query callback received for item {item_id}")
+                        def ugc_query_callback(_result, _item_id=item_id):
+                            logger.debug(f"UGC query callback received for item {_item_id}")
                         
                         steamworks.Workshop.SendQueryUGCRequest(
                             query_handle,
                             callback=ugc_query_callback,
                             override_callback=True
                         )
-                        await asyncio.sleep(0.5)  # 等待查询完成
+                        time.sleep(0.5)  # 等待查询完成
                         
                         try:
                             result = steamworks.Workshop.GetQueryUGCResult(query_handle, 0)
@@ -463,6 +463,7 @@ async def get_workshop_item_details(item_id: str):
             callback=ugc_query_callback,
             override_callback=True
         )
+        await asyncio.sleep(0.5)
         result = steamworks.Workshop.GetQueryUGCResult(query_handle, 0)
         
         if result:

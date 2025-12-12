@@ -42,7 +42,7 @@ async def get_live2d_models(simple: bool = False):
         # 再获取Steam创意工坊模型
         try:
             from .workshop_router import get_subscribed_workshop_items
-            workshop_items_result = await get_subscribed_workshop_items()
+            workshop_items_result = get_subscribed_workshop_items()
             
             # 处理响应结果
             if isinstance(workshop_items_result, dict) and workshop_items_result.get('success', False):
@@ -851,7 +851,11 @@ async def upload_live2d_model(files: List[UploadFile] = File(...)):
                 # 从文件的相对路径中提取目录结构
                 file_path = file.filename
                 # 确保路径安全，移除可能的危险路径字符
-                file_path = file_path.replace('\\', '/').lstrip('/')
+                file_path = file_path.replace('\\', '/')
+                parts = [p for p in file_path.split('/') if p and p != '..']
+                if not parts:
+                    continue
+                file_path = '/'.join(parts)
                 
                 target_file_path = temp_path / file_path
                 target_file_path.parent.mkdir(parents=True, exist_ok=True)
