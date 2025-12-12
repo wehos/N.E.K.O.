@@ -117,7 +117,7 @@ def get_live2d_models(simple: bool = False):
 @router.get("/api/models")
 async def get_models_legacy():
     """向后兼容的API端点"""
-    return await get_live2d_models(simple=False)
+    return get_live2d_models(simple=False)
 
 
 @router.get('/api/characters/current_live2d_model')
@@ -134,16 +134,16 @@ async def get_current_live2d_model(catgirl_name: str = "", item_id: str = ""):
         live2d_model_name = None
         model_info = None
         
+        # 只调用一次 get_live2d_models()，它会返回包含 item_id 的完整模型列表
+        # 避免多次调用 find_models() 导致重复 os.walk
+        all_models = get_live2d_models(simple=False)
+        
         # 尝试通过item_id查找
         if item_id:
-            try:
-                all_models = find_models()
-                matching_model = next((m for m in all_models if m.get('item_id') == item_id), None)
-                if matching_model:
-                    model_info = matching_model.copy()
-                    live2d_model_name = model_info['name']
-            except Exception as e:
-                logger.warning(f"通过item_id查找模型失败: {e}")
+            matching_model = next((m for m in all_models if m.get('item_id') == item_id), None)
+            if matching_model:
+                model_info = matching_model.copy()
+                live2d_model_name = model_info['name']
         
         # 通过角色名称查找
         if not model_info and catgirl_name:
@@ -153,36 +153,24 @@ async def get_current_live2d_model(catgirl_name: str = "", item_id: str = ""):
                 saved_item_id = catgirl_data.get('live2d_item_id')
                 
                 if saved_item_id:
-                    try:
-                        all_models = find_models()
-                        matching_model = next((m for m in all_models if m.get('item_id') == saved_item_id), None)
-                        if matching_model:
-                            model_info = matching_model.copy()
-                            live2d_model_name = model_info['name']
-                    except Exception as e:
-                        logger.warning(f"通过保存的item_id查找模型失败: {e}")
+                    matching_model = next((m for m in all_models if m.get('item_id') == saved_item_id), None)
+                    if matching_model:
+                        model_info = matching_model.copy()
+                        live2d_model_name = model_info['name']
         
-        # 获取模型信息
+        # 获取模型信息（通过名称匹配）
         if live2d_model_name and not model_info:
-            try:
-                all_models = find_models()
-                matching_model = next((m for m in all_models if m['name'] == live2d_model_name), None)
-                if matching_model:
-                    model_info = matching_model.copy()
-            except Exception as e:
-                logger.warning(f"获取模型信息失败: {e}")
+            matching_model = next((m for m in all_models if m['name'] == live2d_model_name), None)
+            if matching_model:
+                model_info = matching_model.copy()
         
         # 回退到默认模型
         if not live2d_model_name or not model_info:
             live2d_model_name = 'mao_pro'
-            try:
-                all_models = find_models()
-                matching_model = next((m for m in all_models if m['name'] == 'mao_pro'), None)
-                if matching_model:
-                    model_info = matching_model.copy()
-                    model_info['is_fallback'] = True
-            except Exception as e:
-                logger.error(f"获取默认模型mao_pro失败: {e}")
+            matching_model = next((m for m in all_models if m['name'] == 'mao_pro'), None)
+            if matching_model:
+                model_info = matching_model.copy()
+                model_info['is_fallback'] = True
         
         return JSONResponse(content={
             'success': True,
@@ -377,6 +365,9 @@ async def update_model_config(model_name: str, request: Request):
         with open(model_json_path, 'r', encoding='utf-8') as f:
             current_config = json.load(f)
             
+        current_config["FileReferences"].setdefault("Motions", {})
+        current_config["FileReferences"].setdefault("Motions", {})
+        current_config["FileReferences"].setdefault("Expressions", [])
         if 'FileReferences' in data and 'Motions' in data['FileReferences']:
             current_config['FileReferences']['Motions'] = data['FileReferences']['Motions']
             
@@ -465,23 +456,88 @@ async def update_emotion_mapping(model_name: str, request: Request):
     try:
         data = await request.json()
         
-        model_dir, _ = find_model_directory(model_name)
-        mapping_file = os.path.join(model_dir, 'emotion_mapping.json')
+        if not data:
+            return JSONResponse(status_code=400, content={"success": False, "error": "无效的数据"})
+
+        # 查找模型目录（可能在static或用户文档目录）
+        model_dir, url_prefix = find_model_directory(model_name)
+        if not os.path.exists(model_dir):
+            return JSONResponse(status_code=404, content={"success": False, "error": "模型目录不存在"})
         
-        with open(mapping_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        # 查找.model3.json文件
+        model_json_path = None
+        for file in os.listdir(model_dir):
+            if file.endswith('.model3.json'):
+                model_json_path = os.path.join(model_dir, file)
+                break
         
-        return JSONResponse(content={
-            'success': True,
-            'message': '情绪映射已更新'
-        })
+        if not model_json_path or not os.path.exists(model_json_path):
+            return JSONResponse(status_code=404, content={"success": False, "error": "模型配置文件不存在"})
+
+        with open(model_json_path, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+
+        # 统一写入到标准 Cubism 结构（FileReferences.Motions / FileReferences.Expressions）
+        file_refs = config_data.setdefault('FileReferences', {})
+
+        # 处理 motions: data 结构为 { motions: { emotion: ["motions/xxx.motion3.json", ...] }, expressions: {...} }
+        motions_input = (data.get('motions') if isinstance(data, dict) else None) or {}
+        motions_output = {}
+        for group_name, files in motions_input.items():
+            # 禁止在"常驻"组配置任何motion
+            if group_name == '常驻':
+                logger.info("忽略常驻组中的motion配置（只允许expression）")
+                continue
+            items = []
+            for file_path in files or []:
+                if not isinstance(file_path, str):
+                    continue
+                normalized = file_path.replace('\\', '/').lstrip('./')
+                items.append({"File": normalized})
+            motions_output[group_name] = items
+        file_refs['Motions'] = motions_output
+
+        # 处理 expressions: 将按 emotion 前缀生成扁平列表，Name 采用 "{emotion}_{basename}" 的约定
+        expressions_input = (data.get('expressions') if isinstance(data, dict) else None) or {}
+
+        # 先保留不属于我们情感前缀的原始表达（避免覆盖用户自定义）
+        existing_expressions = file_refs.get('Expressions', []) or []
+        emotion_prefixes = set(expressions_input.keys())
+        preserved_expressions = []
+        for item in existing_expressions:
+            try:
+                name = (item.get('Name') or '') if isinstance(item, dict) else ''
+                prefix = name.split('_', 1)[0] if '_' in name else None
+                if not prefix or prefix not in emotion_prefixes:
+                    preserved_expressions.append(item)
+            except Exception:
+                preserved_expressions.append(item)
+
+        new_expressions = []
+        for emotion, files in expressions_input.items():
+            for file_path in files or []:
+                if not isinstance(file_path, str):
+                    continue
+                normalized = file_path.replace('\\', '/').lstrip('./')
+                base = os.path.basename(normalized)
+                base_no_ext = base.replace('.exp3.json', '')
+                name = f"{emotion}_{base_no_ext}"
+                new_expressions.append({"Name": name, "File": normalized})
+
+        file_refs['Expressions'] = preserved_expressions + new_expressions
+
+        # 同时保留一份 EmotionMapping（供管理器读取与向后兼容）
+        config_data['EmotionMapping'] = data
+
+        # 保存配置到文件
+        with open(model_json_path, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
         
+        logger.info(f"模型 {model_name} 的情绪映射配置已更新（已同步到 FileReferences）")
+        return {"success": True, "message": "情绪映射配置已保存"}
     except Exception as e:
         logger.error(f"更新情绪映射失败: {e}")
-        return JSONResponse(content={
-            'success': False,
-            'error': str(e)
-        })
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
 @router.get('/api/live2d/model_files/{model_name}')

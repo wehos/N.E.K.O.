@@ -380,7 +380,7 @@ def get_subscribed_workshop_items():
 
 
 @router.get('/api/steam/workshop/item/{item_id}/path')
-async def get_workshop_item_path(item_id: str):
+def get_workshop_item_path(item_id: str):
     """获取单个Steam创意工坊物品的下载路径"""
     steamworks = get_steamworks()
     
@@ -437,7 +437,7 @@ async def get_workshop_item_path(item_id: str):
 
 
 @router.get('/api/steam/workshop/item/{item_id}')
-async def get_workshop_item_details(item_id: str):
+def get_workshop_item_details(item_id: str):
     """获取单个Steam创意工坊物品的详细信息"""
     steamworks = get_steamworks()
     
@@ -455,15 +455,15 @@ async def get_workshop_item_details(item_id: str):
         query_handle = steamworks.Workshop.CreateQueryUGCDetailsRequest([item_id_int])
         
         # Define a callback for UGC query completion
-        def ugc_query_callback(result):
-            logger.debug(f"UGC query callback received for item {item_id}")
+        def ugc_query_callback(_result, _item_id=item_id):
+            logger.debug(f"UGC query callback received for item {_item_id}")
         
         steamworks.Workshop.SendQueryUGCRequest(
             query_handle,
             callback=ugc_query_callback,
             override_callback=True
         )
-        await asyncio.sleep(0.5)
+        time.sleep(0.5)
         result = steamworks.Workshop.GetQueryUGCResult(query_handle, 0)
         
         if result:
@@ -647,7 +647,7 @@ async def save_workshop_config_api(config_data: dict):
 
 
 @router.post('/api/steam/workshop/local-items/scan')
-async def scan_local_workshop_items(request: Request):
+def scan_local_workshop_items(request: Request):
     """扫描本地创意工坊物品"""
     try:
         logger.info('接收到扫描本地创意工坊物品的API请求')
@@ -655,7 +655,7 @@ async def scan_local_workshop_items(request: Request):
         workshop_config_data = load_workshop_config()
         logger.info(f'创意工坊配置已加载: {workshop_config_data}')
         
-        data = await request.json()
+        data = asyncio.run(request.json())
         logger.info(f'请求数据: {data}')
         folder_path = data.get('folder_path')
         
