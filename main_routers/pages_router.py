@@ -89,8 +89,8 @@ async def memory_browser(request: Request):
 # to avoid matching static paths like /l2d, /api_key, /memory_browser, etc.
 @router.get("/{lanlan_name}", response_class=HTMLResponse)
 async def get_index(request: Request, lanlan_name: str):
+    # lanlan_name 将从 URL 中提取，前端会通过 API 获取配置
     templates = get_templates()
     return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": lanlan_name
+        "request": request
     })

@@ -29,7 +29,7 @@ logger = logging.getLogger("Main")
 
 
 @router.get("/api/live2d/models")
-def get_live2d_models(simple: bool = False):
+async def get_live2d_models(simple: bool = False):
     """
     获取Live2D模型列表
     Args:
@@ -122,55 +122,134 @@ async def get_models_legacy():
 
 @router.get('/api/characters/current_live2d_model')
 async def get_current_live2d_model(catgirl_name: str = "", item_id: str = ""):
-    """获取指定角色或当前角色的Live2D模型信息"""
+    """获取指定角色或当前角色的Live2D模型信息
+    
+    Args:
+        catgirl_name: 角色名称
+        item_id: 可选的物品ID，用于直接指定模型
+    """
     _config_manager = get_config_manager()
     
     try:
         characters = _config_manager.load_characters()
         
+        # 如果没有指定角色名称，使用当前猫娘
         if not catgirl_name:
             catgirl_name = characters.get('当前猫娘', '')
         
+        # 查找指定角色的Live2D模型
         live2d_model_name = None
         model_info = None
+        catgirl_data = None
         
-        # 只调用一次 get_live2d_models()，它会返回包含 item_id 的完整模型列表
-        # 避免多次调用 find_models() 导致重复 os.walk
-        all_models = get_live2d_models(simple=False)
-        
-        # 尝试通过item_id查找
+        # 首先尝试通过item_id查找模型
         if item_id:
-            matching_model = next((m for m in all_models if m.get('item_id') == item_id), None)
-            if matching_model:
-                model_info = matching_model.copy()
-                live2d_model_name = model_info['name']
+            try:
+                logger.debug(f"尝试通过item_id {item_id} 查找模型")
+                # 获取所有模型
+                all_models = find_models()
+                # 查找匹配item_id的模型
+                matching_model = next((m for m in all_models if m.get('item_id') == item_id), None)
+                
+                if matching_model:
+                    logger.debug(f"通过item_id找到模型: {matching_model['name']}")
+                    # 复制模型信息
+                    model_info = matching_model.copy()
+                    live2d_model_name = model_info['name']
+            except Exception as e:
+                logger.warning(f"通过item_id查找模型失败: {e}")
         
-        # 通过角色名称查找
+        # 如果没有通过item_id找到模型，再通过角色名称查找
         if not model_info and catgirl_name:
+            # 在猫娘列表中查找
             if '猫娘' in characters and catgirl_name in characters['猫娘']:
                 catgirl_data = characters['猫娘'][catgirl_name]
                 live2d_model_name = catgirl_data.get('live2d')
-                saved_item_id = catgirl_data.get('live2d_item_id')
                 
+                # 检查是否有保存的item_id
+                saved_item_id = catgirl_data.get('live2d_item_id')
                 if saved_item_id:
-                    matching_model = next((m for m in all_models if m.get('item_id') == saved_item_id), None)
-                    if matching_model:
-                        model_info = matching_model.copy()
-                        live2d_model_name = model_info['name']
+                    logger.debug(f"发现角色 {catgirl_name} 保存的item_id: {saved_item_id}")
+                    try:
+                        # 尝试通过保存的item_id查找模型
+                        all_models = find_models()
+                        matching_model = next((m for m in all_models if m.get('item_id') == saved_item_id), None)
+                        if matching_model:
+                            logger.debug(f"通过保存的item_id找到模型: {matching_model['name']}")
+                            model_info = matching_model.copy()
+                            live2d_model_name = model_info['name']
+                    except Exception as e:
+                        logger.warning(f"通过保存的item_id查找模型失败: {e}")
         
-        # 获取模型信息（通过名称匹配）
+        # 如果找到了模型名称，获取模型信息
         if live2d_model_name and not model_info:
-            matching_model = next((m for m in all_models if m['name'] == live2d_model_name), None)
-            if matching_model:
-                model_info = matching_model.copy()
+            try:
+                # 先从完整的模型列表中查找，这样可以获取到item_id等完整信息
+                all_models = find_models()
+                # 查找匹配的模型
+                matching_model = next((m for m in all_models if m['name'] == live2d_model_name), None)
+                
+                if matching_model:
+                    # 使用完整的模型信息，包含item_id
+                    model_info = matching_model.copy()
+                    logger.debug(f"从完整模型列表获取模型信息: {model_info}")
+                else:
+                    # 如果在完整列表中找不到，回退到原来的逻辑
+                    model_dir, url_prefix = find_model_directory(live2d_model_name)
+                    if os.path.exists(model_dir):
+                        # 查找模型配置文件
+                        model_files = [f for f in os.listdir(model_dir) if f.endswith('.model3.json')]
+                        if model_files:
+                            model_file = model_files[0]
+                            
+                            # 使用保存的item_id构建model_path
+                            # 从之前的逻辑中获取saved_item_id
+                            saved_item_id = catgirl_data.get('live2d_item_id', '') if catgirl_data else ''
+                            
+                            # 如果有保存的item_id，使用它构建路径
+                            if saved_item_id:
+                                model_path = f'{url_prefix}/{saved_item_id}/{model_file}'
+                                logger.debug(f"使用保存的item_id构建模型路径: {model_path}")
+                            else:
+                                # 原始路径构建逻辑
+                                model_path = f'{url_prefix}/{live2d_model_name}/{model_file}'
+                                logger.debug(f"使用模型名称构建路径: {model_path}")
+                            
+                            model_info = {
+                                'name': live2d_model_name,
+                                'item_id': saved_item_id,
+                                'path': model_path
+                            }
+            except Exception as e:
+                logger.warning(f"获取模型信息失败: {e}")
         
-        # 回退到默认模型
+        # 回退机制：如果没有找到模型，使用默认的mao_pro
         if not live2d_model_name or not model_info:
+            logger.info(f"猫娘 {catgirl_name} 未设置Live2D模型，回退到默认模型 mao_pro")
             live2d_model_name = 'mao_pro'
-            matching_model = next((m for m in all_models if m['name'] == 'mao_pro'), None)
-            if matching_model:
-                model_info = matching_model.copy()
-                model_info['is_fallback'] = True
+            try:
+                # 先从完整的模型列表中查找mao_pro
+                all_models = find_models()
+                matching_model = next((m for m in all_models if m['name'] == 'mao_pro'), None)
+                
+                if matching_model:
+                    model_info = matching_model.copy()
+                    model_info['is_fallback'] = True
+                else:
+                    # 如果找不到，回退到原来的逻辑
+                    model_dir, url_prefix = find_model_directory('mao_pro')
+                    if os.path.exists(model_dir):
+                        model_files = [f for f in os.listdir(model_dir) if f.endswith('.model3.json')]
+                        if model_files:
+                            model_file = model_files[0]
+                            model_path = f'{url_prefix}/mao_pro/{model_file}'
+                            model_info = {
+                                'name': 'mao_pro',
+                                'path': model_path,
+                                'is_fallback': True  # 标记这是回退模型
+                            }
+            except Exception as e:
+                logger.error(f"获取默认模型mao_pro失败: {e}")
         
         return JSONResponse(content={
             'success': True,
@@ -907,11 +986,7 @@ async def upload_live2d_model(files: List[UploadFile] = File(...)):
                 # 从文件的相对路径中提取目录结构
                 file_path = file.filename
                 # 确保路径安全，移除可能的危险路径字符
-                file_path = file_path.replace('\\', '/')
-                parts = [p for p in file_path.split('/') if p and p != '..']
-                if not parts:
-                    continue
-                file_path = '/'.join(parts)
+                file_path = file_path.replace('\\', '/').lstrip('/')
                 
                 target_file_path = temp_path / file_path
                 target_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -940,27 +1015,124 @@ async def upload_live2d_model(files: List[UploadFile] = File(...)):
             _config_manager.ensure_live2d_directory()
             user_live2d_dir = _config_manager.live2d_dir
             
-            # 检查模型是否已存在
+            # 目标目录
             target_model_dir = user_live2d_dir / model_name
+            
+            # 如果目标目录已存在，返回错误或覆盖（这里选择返回错误）
             if target_model_dir.exists():
-                # 删除已存在的模型目录
-                shutil.rmtree(target_model_dir)
-                logger.info(f"删除已存在的模型目录: {target_model_dir}")
+                return JSONResponse(status_code=400, content={
+                    "success": False, 
+                    "error": f"模型 {model_name} 已存在，请先删除或重命名现有模型"
+                })
             
-            # 复制模型到用户文档目录
+            # 复制模型根目录到用户文档的live2d目录
             shutil.copytree(model_root_dir, target_model_dir)
-            logger.info(f"模型已复制到: {target_model_dir}")
+
+            # 上传后：遍历模型目录中的所有动作文件（*.motion3.json），
+            # 将官方白名单参数及模型自身在 .model3.json 中声明为 LipSync 的参数的 Segments 清空为 []。
+            # 这样可以兼顾官方参数与模型声明的口型参数，同时忽略未声明的作者自定义命名（避免误伤）。
+            try:
+                # 官方口型参数白名单（尽量全面列出常见和官方命名的嘴部/口型相关参数）
+                # 仅包含与嘴巴形状、发音帧（A/I/U/E/O）、下颚/唇动作直接相关的参数；
+                # 明确排除头部/身体/表情等其它参数（例如 ParamAngleZ、ParamAngleX 等不应在此）。
+                official_mouth_params = {
+                    # 五个基本发音帧（A/I/U/E/O）
+                    'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO',
+                    # 常见嘴部上下/开启/形状参数
+                    'ParamMouthUp', 'ParamMouthDown', 'ParamMouthOpen', 'ParamMouthOpenY',
+                    'ParamMouthForm', 'ParamMouthX', 'ParamMouthY', 'ParamMouthSmile', 'ParamMouthPucker',
+                    'ParamMouthStretch', 'ParamMouthShrug', 'ParamMouthLeft', 'ParamMouthRight',
+                    'ParamMouthCornerUpLeft', 'ParamMouthCornerUpRight',
+                    'ParamMouthCornerDownLeft', 'ParamMouthCornerDownRight',
+                    # 唇相关（部分模型/官方扩展中可能出现）
+                    'ParamLipA', 'ParamLipI', 'ParamLipU', 'ParamLipE', 'ParamLipO', 'ParamLipThickness',
+                    # 下颚（部分模型以下颚控制口型）
+                    'ParamJawOpen', 'ParamJawForward', 'ParamJawLeft', 'ParamJawRight',
+                    # 其它口型相关（保守列入）
+                    'ParamMouthAngry', 'ParamMouthAngryLine'
+                }
+
+                # 尝试读取模型的.model3.json，提取 Groups -> Name == "LipSync" && Target == "Parameter" 的 Ids
+                model_declared_mouth_params = set()
+                try:
+                    local_model_json = target_model_dir / model_json_file.name
+                    if local_model_json.exists():
+                        with open(local_model_json, 'r', encoding='utf-8') as mf:
+                            try:
+                                model_cfg = json.load(mf)
+                                groups = model_cfg.get('Groups') if isinstance(model_cfg, dict) else None
+                                if isinstance(groups, list):
+                                    for grp in groups:
+                                        try:
+                                            if not isinstance(grp, dict):
+                                                continue
+                                            # 仅考虑官方 Group Name 为 LipSync 且 Target 为 Parameter 的条目
+                                            if grp.get('Name') == 'LipSync' and grp.get('Target') == 'Parameter':
+                                                ids = grp.get('Ids') or []
+                                                for pid in ids:
+                                                    if isinstance(pid, str) and pid:
+                                                        model_declared_mouth_params.add(pid)
+                                        except Exception:
+                                            continue
+                            except Exception:
+                                # 解析失败则认为未找到 groups，继续使用官方白名单
+                                pass
+                except Exception:
+                    pass
+
+                # 合并白名单（官方 + 模型声明）
+                mouth_param_whitelist = set(official_mouth_params)
+                mouth_param_whitelist.update(model_declared_mouth_params)
+
+                for motion_path in target_model_dir.rglob('*.motion3.json'):
+                    try:
+                        with open(motion_path, 'r', encoding='utf-8') as mf:
+                            try:
+                                motion_data = json.load(mf)
+                            except Exception:
+                                # 非 JSON 或解析失败则跳过
+                                continue
+
+                        modified = False
+                        curves = motion_data.get('Curves') if isinstance(motion_data, dict) else None
+                        if isinstance(curves, list):
+                            for curve in curves:
+                                try:
+                                    if not isinstance(curve, dict):
+                                        continue
+                                    cid = curve.get('Id')
+                                    if not cid:
+                                        continue
+                                    # 严格按白名单匹配（避免模糊匹配误伤）
+                                    if cid in mouth_param_whitelist:
+                                        # 清空 Segments（若存在）
+                                        if 'Segments' in curve and curve['Segments']:
+                                            curve['Segments'] = []
+                                            modified = True
+                                except Exception:
+                                    continue
+
+                        if modified:
+                            try:
+                                with open(motion_path, 'w', encoding='utf-8') as mf:
+                                    json.dump(motion_data, mf, ensure_ascii=False, indent=4)
+                                logger.info(f"已清除口型参数：{motion_path}")
+                            except Exception:
+                                # 写入失败则记录但不阻止上传
+                                logger.exception(f"写入 motion 文件失败: {motion_path}")
+                    except Exception:
+                        continue
+            except Exception:
+                logger.exception("处理 motion 文件时发生错误")
             
-            # 构建模型URL路径
-            model_config_file = model_json_file.name
-            model_url = f"/user_live2d/{model_name}/{model_config_file}"
+            logger.info(f"成功上传Live2D模型: {model_name} -> {target_model_dir}")
             
-            return {
+            return JSONResponse(content={
                 "success": True,
                 "message": f"模型 {model_name} 上传成功",
                 "model_name": model_name,
-                "model_path": model_url
-            }
+                "model_path": str(target_model_dir)
+            })
             
     except Exception as e:
         logger.error(f"上传Live2D模型失败: {e}")

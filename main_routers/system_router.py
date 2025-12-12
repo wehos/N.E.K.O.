@@ -20,8 +20,8 @@ from fastapi.responses import JSONResponse, Response
 import httpx
 from openai import AsyncOpenAI, APITimeoutError
 
-from .shared_state import get_steamworks, get_config_manager
-from config import MEMORY_SERVER_PORT, get_extra_body
+from .shared_state import get_steamworks, get_config_manager, get_sync_message_queue
+from config import MEMORY_SERVER_PORT, get_extra_body, MODELS_WITH_EXTRA_BODY
 from config.prompts_sys import emotion_analysis_prompt
 from utils.workshop_utils import get_workshop_path
 
@@ -98,46 +98,105 @@ async def emotion_analysis(request: Request):
     
     try:
         data = await request.json()
-        text = data.get('text', '')
+        if not data or 'text' not in data:
+            return {"error": "请求体中必须包含text字段"}
         
-        if not text:
-            return JSONResponse({"error": "缺少文本内容"}, status_code=400)
+        text = data['text']
+        api_key = data.get('api_key')
+        model = data.get('model')
         
-        # 获取情绪分析模型配置
+        # 使用参数或默认配置，使用 .get() 安全获取避免 KeyError
         emotion_config = _config_manager.get_model_api_config('emotion')
+        emotion_api_key = emotion_config.get('api_key')
+        emotion_model = emotion_config.get('model')
+        emotion_base_url = emotion_config.get('base_url')
         
-        model = emotion_config.get('model')
-        base_url = emotion_config.get('base_url')
-        api_key = emotion_config.get('api_key')
+        # 优先使用请求参数，其次使用配置
+        api_key = api_key or emotion_api_key
+        model = model or emotion_model
         
-        if not model or not base_url or not api_key:
-            return JSONResponse({
-                "error": "情绪分析模型配置缺失"
-            }, status_code=500)
+        if not api_key:
+            return {"error": "情绪分析模型配置缺失: API密钥未提供且配置中未设置默认密钥"}
         
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=5.0)
+        if not model:
+            return {"error": "情绪分析模型配置缺失: 模型名称未提供且配置中未设置默认模型"}
         
-        extra_body = get_extra_body(model)
+        # 创建异步客户端
+        client = AsyncOpenAI(api_key=api_key, base_url=emotion_base_url)
         
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": emotion_analysis_prompt},
-                {"role": "user", "content": text}
-            ],
-            extra_body=extra_body if extra_body else None
-        )
+        # 构建请求消息
+        messages = [
+            {
+                "role": "system", 
+                "content": emotion_analysis_prompt
+            },
+            {
+                "role": "user", 
+                "content": text
+            }
+        ]
         
-        emotion = response.choices[0].message.content.strip()
+        # 异步调用模型
+        request_params = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 100
+        }
         
-        return {"success": True, "emotion": emotion}
+        # 只有在需要时才添加 extra_body
+        if model in MODELS_WITH_EXTRA_BODY:
+            request_params["extra_body"] = {"enable_thinking": False}
         
-    except APITimeoutError as e:
-        logger.error(f"情绪分析请求超时: {e}")
-        return JSONResponse({"success": False, "error": "情绪分析请求超时"}, status_code=504)
+        response = await client.chat.completions.create(**request_params)
+        
+        # 解析响应
+        result_text = response.choices[0].message.content.strip()
+        
+        # 尝试解析JSON响应
+        try:
+            import json
+            result = json.loads(result_text)
+            # 获取emotion和confidence
+            emotion = result.get("emotion", "neutral")
+            confidence = result.get("confidence", 0.5)
+            
+            # 当confidence小于0.3时，自动将emotion设置为neutral
+            if confidence < 0.3:
+                emotion = "neutral"
+            
+            # 获取 lanlan_name 并推送到 monitor
+            lanlan_name = data.get('lanlan_name')
+            if lanlan_name:
+                sync_message_queue = get_sync_message_queue()
+                if lanlan_name in sync_message_queue:
+                    sync_message_queue[lanlan_name].put({
+                        "type": "json",
+                        "data": {
+                            "type": "emotion",
+                            "emotion": emotion,
+                            "confidence": confidence
+                        }
+                    })
+            
+            return {
+                "emotion": emotion,
+                "confidence": confidence
+            }
+        except json.JSONDecodeError:
+            # 如果JSON解析失败，返回简单的情感判断
+            return {
+                "emotion": "neutral",
+                "confidence": 0.5
+            }
+            
     except Exception as e:
-        logger.error(f"情绪分析失败: {e}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        logger.error(f"情感分析失败: {e}")
+        return {
+            "error": f"情感分析失败: {str(e)}",
+            "emotion": "neutral",
+            "confidence": 0.0
+        }
 
 
 @router.post('/api/steam/set-achievement-status/{name}')

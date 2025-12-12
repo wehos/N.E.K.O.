@@ -548,7 +548,7 @@ def get_workshop_item_details(item_id: str):
         query_handle = None
 
 
-@router.post('/api/steam/workshop/item/unsubscribe')
+@router.post('/api/steam/workshop/unsubscribe')
 async def unsubscribe_workshop_item(request: Request):
     """取消订阅Steam创意工坊物品"""
     steamworks = get_steamworks()
@@ -601,12 +601,6 @@ async def unsubscribe_workshop_item(request: Request):
             "error": "服务器内部错误",
             "message": f"取消订阅过程中发生错误: {str(e)}"
         }, status_code=500)
-
-
-@router.post('/api/steam/workshop/unsubscribe')
-async def unsubscribe_workshop_item_legacy(request: Request):
-    """取消订阅Steam创意工坊物品 (兼容旧API)"""
-    return await unsubscribe_workshop_item(request)
 
 
 @router.get('/api/steam/workshop/config')

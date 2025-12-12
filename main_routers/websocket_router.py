@@ -12,13 +12,14 @@ import json
 import uuid
 import asyncio
 import logging
-import random
 import base64
 import tempfile
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
-from openai import AsyncOpenAI
+from openai import APIConnectionError, InternalServerError, RateLimitError
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, AIMessage
 import httpx
 
 from .shared_state import (
@@ -26,7 +27,7 @@ from .shared_state import (
     get_session_id, 
     get_config_manager,
 )
-from config import get_extra_body, TOOL_SERVER_PORT
+from config import MEMORY_SERVER_PORT
 from config.prompts_sys import proactive_chat_prompt, proactive_chat_prompt_screenshot
 from utils.screenshot_utils import analyze_screenshot_from_data_url
 
@@ -163,149 +164,280 @@ async def notify_task_result(request: Request):
 @router.post('/api/proactive_chat')
 async def proactive_chat(request: Request):
     """主动搭话：根据概率选择使用图片或热门内容，让AI决定是否主动发起对话"""
+    from utils.web_scraper import fetch_trending_content, format_trending_content
+    from uuid import uuid4
+    
     _config_manager = get_config_manager()
     session_manager = get_session_manager()
     
     try:
+        # 获取当前角色数据
         master_name_current, her_name_current, _, _, _, _, _, _, _, _ = _config_manager.get_character_data()
         
         data = await request.json()
         lanlan_name = data.get('lanlan_name') or her_name_current
         
+        # 获取session manager
         mgr = session_manager.get(lanlan_name)
         if not mgr:
-            return JSONResponse({
-                "success": False, 
-                "error": f"角色 {lanlan_name} 不存在"
-            }, status_code=404)
+            return JSONResponse({"success": False, "error": f"角色 {lanlan_name} 不存在"}, status_code=404)
         
+        # 检查是否正在响应中（如果正在说话，不打断）
         if mgr.is_active and hasattr(mgr.session, '_is_responding') and mgr.session._is_responding:
             return JSONResponse({
                 "success": False, 
-                "error": "AI正在响应中，无法主动搭话"
+                "error": "AI正在响应中，无法主动搭话",
+                "message": "请等待当前响应完成"
             }, status_code=409)
         
         logger.info(f"[{lanlan_name}] 开始主动搭话流程...")
         
-        # 获取proactive_chat配置的API
-        proactive_config = _config_manager.get_model_api_config('proactive_chat')
-        model = proactive_config.get('model')
-        base_url = proactive_config.get('base_url')
-        api_key = proactive_config.get('api_key')
+        # 1. 检查前端是否发送了截图数据
+        screenshot_data = data.get('screenshot_data')
+        # 防御性检查：确保screenshot_data是字符串类型
+        has_screenshot = bool(screenshot_data) and isinstance(screenshot_data, str)
         
-        if not model or not base_url or not api_key:
-            return JSONResponse({
-                "success": False, 
-                "error": "主动搭话模型配置缺失"
-            }, status_code=500)
+        # 前端已经根据三种模式决定是否使用截图
+        use_screenshot = has_screenshot
         
-        # 概率选择使用截图还是热门内容
-        screenshot_data = data.get('screenshot')
-        use_screenshot = False
-        
-        if screenshot_data:
-            screenshot_probability = 0.3  # 30%概率使用截图
-            if random.random() < screenshot_probability:
-                use_screenshot = True
-                logger.info(f"[{lanlan_name}] 选择使用截图模式进行主动搭话")
-            else:
-                logger.info(f"[{lanlan_name}] 虽然有截图但选择使用热门内容模式")
+        if use_screenshot:
+            logger.info(f"[{lanlan_name}] 前端选择使用截图进行主动搭话")
+            
+            # 处理前端发送的截图数据
+            try:
+                # 将DataURL转换为base64数据并分析
+                screenshot_content = await analyze_screenshot_from_data_url(screenshot_data)
+                if not screenshot_content:
+                    logger.warning(f"[{lanlan_name}] 截图分析失败，跳过本次搭话")
+                    return JSONResponse({
+                        "success": False,
+                        "error": "截图分析失败，请检查截图格式是否正确",
+                        "action": "pass"
+                    }, status_code=500)
+                else:
+                    logger.info(f"[{lanlan_name}] 成功分析截图内容")
+            except (ValueError, TypeError) as e:
+                logger.exception(f"[{lanlan_name}] 处理截图数据失败")
+                return JSONResponse({
+                    "success": False,
+                    "error": f"截图处理失败: {str(e)}",
+                    "action": "pass"
+                }, status_code=500)
         else:
-            logger.info(f"[{lanlan_name}] 没有截图，使用热门内容模式")
-        
-        # 构建prompt和messages
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        
-        extra_body = get_extra_body(model)
-        
-        if use_screenshot and screenshot_data:
-            # 使用截图模式
-            description = await analyze_screenshot_from_data_url(screenshot_data)
-            if description:
-                prompt = proactive_chat_prompt_screenshot.format(
-                    master_name=master_name_current,
-                    lanlan_name=lanlan_name,
-                    screenshot_content=description
-                )
-                messages = [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": "请根据以上信息决定是否主动搭话。"}
-                ]
-            else:
-                logger.warning("截图分析失败，回退到热门内容模式")
-                use_screenshot = False
+            logger.info(f"[{lanlan_name}] 前端选择使用热门内容进行主动搭话")
         
         if not use_screenshot:
-            # 使用热门内容模式
-            hot_content = ""
+            # 热门内容主动对话
             try:
-                async with httpx.AsyncClient(timeout=10) as http_client:
-                    resp = await http_client.get(f"http://localhost:{TOOL_SERVER_PORT}/api/trending")
-                    if resp.status_code == 200:
-                        trending_data = resp.json()
-                        if trending_data.get("success") and trending_data.get("data"):
-                            items = trending_data["data"][:5]  # 取前5条
-                            hot_content = "\n".join([f"- {item.get('title', '')}" for item in items])
-            except Exception as e:
-                logger.warning(f"获取热门内容失败: {e}")
-            
-            if not hot_content:
-                hot_content = "暂无热门内容"
-            
-            prompt = proactive_chat_prompt.format(
-                master_name=master_name_current,
+                trending_content = await fetch_trending_content(bilibili_limit=10, weibo_limit=10)
+                
+                if not trending_content['success']:
+                    return JSONResponse({
+                        "success": False,
+                        "error": "无法获取热门内容",
+                        "detail": trending_content.get('error', '未知错误')
+                    }, status_code=500)
+                
+                formatted_content = format_trending_content(trending_content)
+                logger.info(f"[{lanlan_name}] 成功获取热门内容")
+                
+            except Exception:
+                logger.exception(f"[{lanlan_name}] 获取热门内容失败")
+                return JSONResponse({
+                    "success": False,
+                    "error": "爬取热门内容时出错",
+                    "detail": "请检查网络连接或热门内容服务状态"
+                }, status_code=500)
+        
+        # 2. 获取new_dialogue prompt
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:{MEMORY_SERVER_PORT}/new_dialog/{lanlan_name}", timeout=5.0)
+                memory_context = resp.text
+        except Exception as e:
+            logger.warning(f"[{lanlan_name}] 获取记忆上下文失败，使用空上下文: {e}")
+            memory_context = ""
+        
+        # 3. 构造提示词（根据选择使用不同的模板）
+        if use_screenshot:
+            # 截图模板：基于屏幕内容让AI决定是否主动发起对话
+            system_prompt = proactive_chat_prompt_screenshot.format(
                 lanlan_name=lanlan_name,
-                hot_content=hot_content
+                master_name=master_name_current,
+                screenshot_content=screenshot_content,
+                memory_context=memory_context
+            )
+            logger.info(f"[{lanlan_name}] 使用图片主动对话提示词")
+        else:
+            # 热门内容模板：基于网络热点让AI决定是否主动发起对话
+            system_prompt = proactive_chat_prompt.format(
+                lanlan_name=lanlan_name,
+                master_name=master_name_current,
+                trending_content=formatted_content,
+                memory_context=memory_context
+            )
+            logger.info(f"[{lanlan_name}] 使用热门内容主动对话提示词")
+
+        # 4. 直接使用langchain ChatOpenAI获取AI回复（不创建临时session）
+        try:
+            # 使用 get_model_api_config 获取 API 配置
+            correction_config = _config_manager.get_model_api_config('correction')
+            
+            # 安全获取配置项，使用 .get() 避免 KeyError
+            correction_model = correction_config.get('model')
+            correction_base_url = correction_config.get('base_url')
+            correction_api_key = correction_config.get('api_key')
+            
+            # 验证必需的配置项
+            if not correction_model or not correction_api_key:
+                logger.error("纠错模型配置缺失: model或api_key未设置")
+                return JSONResponse({
+                    "success": False,
+                    "error": "纠错模型配置缺失",
+                    "detail": "请在设置中配置纠错模型的model和api_key"
+                }, status_code=500)
+            
+            llm = ChatOpenAI(
+                model=correction_model,
+                base_url=correction_base_url,
+                api_key=correction_api_key,
+                temperature=1.1,
+                streaming=False  # 不需要流式，直接获取完整响应
             )
             
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"当前热门话题：\n{hot_content}\n\n请决定是否主动搭话，如果决定搭话，请直接说出搭话内容（不需要任何前缀）。如果决定不搭话，请回复[不搭话]。"}
-            ]
-        
-        # 调用API
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=200,
-            extra_body=extra_body if extra_body else None
-        )
-        
-        ai_decision = response.choices[0].message.content.strip()
-        
-        # 解析AI决定
-        if "[不搭话]" in ai_decision or "不搭话" in ai_decision or ai_decision == "":
-            logger.info(f"[{lanlan_name}] AI决定不主动搭话")
-            return JSONResponse({
-                "success": True,
-                "should_talk": False,
-                "message": "AI决定当前不适合主动搭话"
-            })
-        else:
-            # AI决定主动搭话
-            logger.info(f"[{lanlan_name}] AI决定主动搭话: {ai_decision[:50]}...")
+            # 发送请求获取AI决策 - Retry策略：重试3次，间隔1秒、2秒
+            max_retries = 3
+            retry_delays = [1, 2]
+            response_text = ""
             
-            # 通过WebSocket发送主动搭话
-            if mgr.websocket:
+            for attempt in range(max_retries):
                 try:
-                    await mgr.websocket.send_text(json.dumps({
-                        "type": "proactive_message",
-                        "content": ai_decision,
-                        "source": "screenshot" if use_screenshot else "trending"
-                    }))
-                except Exception as e:
-                    logger.warning(f"发送主动搭话消息失败: {e}")
+                    response = await asyncio.wait_for(
+                        llm.ainvoke([SystemMessage(content=system_prompt)]),
+                        timeout=10.0
+                    )
+                    response_text = response.content.strip()
+                    break  # 成功则退出重试循环
+                except (APIConnectionError, InternalServerError, RateLimitError) as e:
+                    logger.info(f"[INFO] 捕获到 {type(e).__name__} 错误")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delays[attempt]
+                        logger.warning(f"[{lanlan_name}] 主动搭话LLM调用失败 (尝试 {attempt + 1}/{max_retries})，{wait_time}秒后重试: {e}")
+                        # 向前端发送状态提示
+                        if mgr.websocket:
+                            try:
+                                await mgr.send_status(f"正在重试中...（第{attempt + 1}次）")
+                            except:
+                                pass
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"[{lanlan_name}] 主动搭话LLM调用失败，已达到最大重试次数: {e}")
+                        return JSONResponse({
+                            "success": False,
+                            "error": f"AI调用失败，已重试{max_retries}次",
+                            "detail": str(e)
+                        }, status_code=503)
+            
+            logger.info(f"[{lanlan_name}] AI决策结果: {response_text[:100]}...")
+            
+            # 5. 判断AI是否选择搭话
+            if "[PASS]" in response_text or not response_text:
+                return JSONResponse({
+                    "success": True,
+                    "action": "pass",
+                    "message": "AI选择暂时不搭话"
+                })
+            
+            # 6. AI选择搭话，需要通过session manager处理
+            # 首先检查是否有真实的websocket连接
+            if not mgr.websocket:
+                return JSONResponse({
+                    "success": False,
+                    "error": "没有活跃的WebSocket连接，无法主动搭话。请先打开前端页面。"
+                }, status_code=400)
+            
+            # 检查websocket是否连接
+            try:
+                from starlette.websockets import WebSocketState
+                if hasattr(mgr.websocket, 'client_state'):
+                    if mgr.websocket.client_state != WebSocketState.CONNECTED:
+                        return JSONResponse({
+                            "success": False,
+                            "error": "WebSocket未连接，无法主动搭话"
+                        }, status_code=400)
+            except Exception as e:
+                logger.warning(f"检查WebSocket状态失败: {e}")
+            
+            # 检查是否有现有的session，如果没有则创建一个文本session
+            session_created = False
+            if not mgr.session or not hasattr(mgr.session, '_conversation_history'):
+                logger.info(f"[{lanlan_name}] 没有活跃session，创建文本session用于主动搭话")
+                # 使用现有的真实websocket启动session
+                await mgr.start_session(mgr.websocket, new=True, input_mode='text')
+                session_created = True
+                logger.info(f"[{lanlan_name}] 文本session已创建")
+            
+            # 如果是新创建的session，等待TTS准备好
+            if session_created and mgr.use_tts:
+                logger.info(f"[{lanlan_name}] 等待TTS准备...")
+                max_wait = 5  # 最多等待5秒
+                wait_step = 0.1
+                waited = 0
+                while waited < max_wait:
+                    async with mgr.tts_cache_lock:
+                        if mgr.tts_ready:
+                            logger.info(f"[{lanlan_name}] TTS已准备好")
+                            break
+                    await asyncio.sleep(wait_step)
+                    waited += wait_step
+                
+                if waited >= max_wait:
+                    logger.warning(f"[{lanlan_name}] TTS准备超时，继续发送（可能没有语音）")
+            
+            # 现在可以将AI的话添加到对话历史中
+            mgr.session._conversation_history.append(AIMessage(content=response_text))
+            logger.info(f"[{lanlan_name}] 已将主动搭话添加到对话历史")
+            
+            # 生成新的speech_id（用于TTS）
+            async with mgr.lock:
+                mgr.current_speech_id = str(uuid4())
+            
+            # 通过handle_text_data处理这段话（触发TTS和前端显示）
+            # 分chunk发送以模拟流式效果
+            chunks = [response_text[i:i+10] for i in range(0, len(response_text), 10)]
+            for i, chunk in enumerate(chunks):
+                await mgr.handle_text_data(chunk, is_first_chunk=(i == 0))
+                await asyncio.sleep(0.05)  # 小延迟模拟流式
+            
+            # 调用response完成回调
+            if hasattr(mgr, 'handle_response_complete'):
+                await mgr.handle_response_complete()
             
             return JSONResponse({
                 "success": True,
-                "should_talk": True,
-                "message": ai_decision,
-                "source": "screenshot" if use_screenshot else "trending"
+                "action": "chat",
+                "message": "主动搭话已发送",
+                "lanlan_name": lanlan_name
             })
+            
+        except asyncio.TimeoutError:
+            logger.error(f"[{lanlan_name}] AI回复超时")
+            return JSONResponse({
+                "success": False,
+                "error": "AI处理超时"
+            }, status_code=504)
+        except Exception as e:
+            logger.error(f"[{lanlan_name}] AI处理失败: {e}")
+            return JSONResponse({
+                "success": False,
+                "error": "AI处理失败",
+                "detail": str(e)
+            }, status_code=500)
         
     except Exception as e:
         logger.error(f"主动搭话接口异常: {e}")
         return JSONResponse({
             "success": False,
-            "error": str(e)
+            "error": "服务器内部错误",
+            "detail": str(e)
         }, status_code=500)

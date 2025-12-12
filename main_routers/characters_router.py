@@ -23,59 +23,10 @@ import dashscope
 from dashscope.audio.tts_v2 import VoiceEnrollmentService
 
 from .shared_state import get_config_manager, get_session_manager, get_initialize_character_data
-from config import MEMORY_SERVER_PORT, TFLINK_UPLOAD_URL, TFLINK_ALLOWED_HOSTS
+from config import MEMORY_SERVER_PORT
 
 router = APIRouter(tags=["characters"])
 logger = logging.getLogger("Main")
-
-
-def _is_safe_tflink_url(url: str) -> bool:
-    """验证 URL 是否指向 tfLink 白名单中的主机。
-    
-    防止 SSRF 攻击：只允许 tfLink 官方域名/IP，
-    拒绝私有 IP 段、loopback 等内部地址。
-    
-    Args:
-        url: 待验证的 URL
-        
-    Returns:
-        bool: URL 是否安全
-    """
-    from urllib.parse import urlparse
-    import ipaddress
-    
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname
-        
-        if not host:
-            return False
-        
-        # 检查是否在白名单中
-        if host in TFLINK_ALLOWED_HOSTS:
-            return True
-        
-        # 检查是否是 IP 地址
-        try:
-            ip = ipaddress.ip_address(host)
-            # 拒绝私有 IP、loopback、链路本地等
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                logger.warning(f"拒绝不安全的 IP 地址: {host}")
-                return False
-            # IP 地址必须在白名单中
-            return host in TFLINK_ALLOWED_HOSTS
-        except ValueError:
-            # 不是 IP 地址，是域名
-            # 检查域名是否匹配白名单（支持子域名）
-            for allowed_host in TFLINK_ALLOWED_HOSTS:
-                if host == allowed_host or host.endswith('.' + allowed_host):
-                    return True
-            return False
-            
-    except Exception as e:
-        logger.error(f"验证 URL 安全性时出错: {e}")
-        return False
-
 
 
 @router.get('/api/characters')
@@ -109,7 +60,7 @@ async def get_catgirl_voice_mode_status(name: str):
     
     is_voice_mode = False
     if is_active and mgr:
-        from main_logic.omni_realtime_client import OmniRealtimeClient
+        from main_helper.omni_realtime_client import OmniRealtimeClient
         is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
     
     return JSONResponse({
@@ -142,7 +93,7 @@ async def set_current_catgirl(request: Request):
     if old_catgirl and old_catgirl in session_manager:
         mgr = session_manager[old_catgirl]
         if mgr.is_active:
-            from main_logic.omni_realtime_client import OmniRealtimeClient
+            from main_helper.omni_realtime_client import OmniRealtimeClient
             is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
             
             if is_voice_mode:
@@ -251,9 +202,15 @@ async def add_catgirl(request: Request):
         async with httpx.AsyncClient() as client:
             resp = await client.post(f"http://localhost:{MEMORY_SERVER_PORT}/reload", timeout=5.0)
             if resp.status_code == 200:
-                logger.info(f"✅ 已通知记忆服务器重新加载配置")
+                result = resp.json()
+                if result.get('status') == 'success':
+                    logger.info(f"✅ 已通知记忆服务器重新加载配置（新角色 {key}）")
+                else:
+                    logger.warning(f"⚠️ 记忆服务器重新加载配置返回: {result.get('message')}")
+            else:
+                logger.warning(f"⚠️ 记忆服务器重新加载配置失败，状态码: {resp.status_code}")
     except Exception as e:
-        logger.warning(f"⚠️ 通知记忆服务器时出错: {e}")
+        logger.warning(f"⚠️ 通知记忆服务器重新加载配置时出错: {e}（不影响角色创建）")
     
     return {"success": True}
 
@@ -342,7 +299,7 @@ async def delete_catgirl(name: str):
     
     current_catgirl = characters.get('当前猫娘', '')
     if name == current_catgirl:
-        return JSONResponse({'success': False, 'error': '不能删除当前正在使用的猫娘！'}, status_code=400)
+        return JSONResponse({'success': False, 'error': '不能删除当前正在使用的猫娘！请先切换到其他猫娘后再删除。'}, status_code=400)
     
     # 删除记忆文件
     try:
@@ -399,7 +356,7 @@ async def rename_catgirl(old_name: str, request: Request):
     if is_current_catgirl and old_name in session_manager:
         mgr = session_manager[old_name]
         if mgr.is_active:
-            from main_logic.omni_realtime_client import OmniRealtimeClient
+            from main_helper.omni_realtime_client import OmniRealtimeClient
             is_voice_mode = mgr.session and isinstance(mgr.session, OmniRealtimeClient)
             if is_voice_mode:
                 return JSONResponse({
@@ -579,45 +536,147 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
     """
     _config_manager = get_config_manager()
     
+    # 直接读取到内存
     try:
-        # 1. 检查文件类型和大小
-        allowed_types = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/ogg', 'audio/m4a', 'audio/x-m4a', 
-                        'audio/webm', 'audio/aac', 'audio/flac', 'audio/x-wav', 'audio/wave']
-        
-        mime_type = file.content_type or 'audio/wav'
-        
-        # 读取文件内容并检查大小
         file_content = await file.read()
-        file_size = len(file_content)
-        max_size = 50 * 1024 * 1024  # 50MB
-        
-        logger.info(f"收到音频文件上传请求: 文件名={file.filename}, 大小={file_size} bytes, MIME类型={mime_type}")
-        
-        if file_size > max_size:
-            return JSONResponse({'error': f'文件太大，最大支持50MB，当前文件大小: {file_size / 1024 / 1024:.2f}MB'}, status_code=400)
-        
-        if file_size == 0:
-            return JSONResponse({'error': '文件内容为空'}, status_code=400)
-        
-        # 创建BytesIO对象用于上传
         file_buffer = io.BytesIO(file_content)
+    except Exception as e:
+        logger.error(f"读取文件到内存失败: {e}")
+        return JSONResponse({'error': f'读取文件失败: {e}'}, status_code=500)
+
+    def validate_audio_file(file_buffer: io.BytesIO, filename: str) -> tuple:
+        """
+        验证音频文件类型和格式
+        返回: (mime_type, error_message)
+        """
+        file_path_obj = pathlib.Path(filename)
+        file_extension = file_path_obj.suffix.lower()
         
-        # 2. 上传到tfLink获取直链
+        # 检查文件扩展名
+        if file_extension not in ['.wav', '.mp3', '.m4a']:
+            return "", f"不支持的文件格式: {file_extension}。仅支持 WAV、MP3 和 M4A 格式。"
+        
+        # 根据扩展名确定MIME类型
+        if file_extension == '.wav':
+            mime_type = "audio/wav"
+            # 检查WAV文件是否为16bit
+            try:
+                file_buffer.seek(0)
+                with wave.open(file_buffer, 'rb') as wav_file:
+                    # 检查采样深度（bit depth）
+                    if wav_file.getsampwidth() != 2:  # 2 bytes = 16 bits
+                        return "", f"WAV文件必须是16bit格式，当前文件是{wav_file.getsampwidth() * 8}bit。"
+                    
+                    # 检查声道数（建议单声道）
+                    channels = wav_file.getnchannels()
+                    if channels > 1:
+                        return "", f"建议使用单声道WAV文件，当前文件有{channels}个声道。"
+                    
+                    # 检查采样率
+                    sample_rate = wav_file.getframerate()
+                    if sample_rate not in [8000, 16000, 22050, 44100, 48000]:
+                        return "", f"建议使用标准采样率(8000, 16000, 22050, 44100, 48000)，当前文件采样率: {sample_rate}Hz。"
+                file_buffer.seek(0)
+            except Exception as e:
+                return "", f"WAV文件格式错误: {str(e)}。请确认您的文件是合法的WAV文件。"
+                
+        elif file_extension == '.mp3':
+            mime_type = "audio/mpeg"
+            try:
+                file_buffer.seek(0)
+                # 读取更多字节以支持不同的MP3格式
+                header = file_buffer.read(32)
+                file_buffer.seek(0)
+
+                # 检查文件大小是否合理
+                file_size = len(file_buffer.getvalue())
+                if file_size < 1024:  # 至少1KB
+                    return "", "MP3文件太小，可能不是有效的音频文件。"
+                if file_size > 1024 * 1024 * 10:  # 10MB
+                    return "", "MP3文件太大，可能不是有效的音频文件。"
+                
+                # 更宽松的MP3文件头检查
+                # MP3文件通常以ID3标签或帧同步字开头
+                # 检查是否以ID3标签开头(ID3v2)
+                has_id3_header = header.startswith(b'ID3')
+                # 检查是否有帧同步字 (FF FA, FF FB, FF F2, FF F3, FF E3等)
+                has_frame_sync = False
+                for i in range(len(header) - 1):
+                    if header[i] == 0xFF and (header[i+1] & 0xE0) == 0xE0:
+                        has_frame_sync = True
+                        break
+                
+                # 如果既没有ID3标签也没有帧同步字，则认为文件可能无效
+                # 但这只是一个警告，不应该严格拒绝
+                if not has_id3_header and not has_frame_sync:
+                    return mime_type, f"警告: MP3文件可能格式不标准，文件头: {header[:4].hex()}"
+                        
+            except Exception as e:
+                return "", f"MP3文件读取错误: {str(e)}。请确认您的文件是合法的MP3文件。"
+                
+        elif file_extension == '.m4a':
+            mime_type = "audio/mp4"
+            try:
+                file_buffer.seek(0)
+                # 读取文件头来验证M4A格式
+                header = file_buffer.read(32)
+                file_buffer.seek(0)
+                
+                # M4A文件应该以'ftyp'盒子开始，通常在偏移4字节处
+                # 检查是否包含'ftyp'标识
+                if b'ftyp' not in header:
+                    return "", "M4A文件格式无效或已损坏。请确认您的文件是合法的M4A文件。"
+                
+                # 进一步验证：检查是否包含常见的M4A类型标识
+                # M4A通常包含'mp4a', 'M4A ', 'M4V '等类型
+                valid_types = [b'mp4a', b'M4A ', b'M4V ', b'isom', b'iso2', b'avc1']
+                has_valid_type = any(t in header for t in valid_types)
+                
+                if not has_valid_type:
+                    return mime_type, "警告: M4A文件格式无效或已损坏。请确认您的文件是合法的M4A文件。"
+                        
+            except Exception as e:
+                return "", f"M4A文件读取错误: {str(e)}。请确认您的文件是合法的M4A文件。"
+        
+        return mime_type, ""
+
+    try:
+        # 1. 验证音频文件
+        mime_type, error_msg = validate_audio_file(file_buffer, file.filename)
+        if not mime_type:
+            return JSONResponse({'error': error_msg}, status_code=400)
+        
+        # 检查文件大小（tfLink支持最大100MB）
+        file_size = len(file_content)
+        if file_size > 100 * 1024 * 1024:  # 100MB
+            return JSONResponse({'error': '文件大小超过100MB，超过tfLink的限制'}, status_code=400)
+        
+        # 2. 上传到 tfLink - 直接使用内存中的内容
+        file_buffer.seek(0)
+        # 根据tfLink API文档，使用multipart/form-data上传文件
+        # 参数名应为 'file'
         files = {'file': (file.filename, file_buffer, mime_type)}
-        headers = {'Accept': 'application/json'}
+        
+        # 添加更多的请求头，确保兼容性
+        headers = {
+            'Accept': 'application/json'
+        }
         
         logger.info(f"正在上传文件到tfLink，文件名: {file.filename}, 大小: {file_size} bytes, MIME类型: {mime_type}")
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(TFLINK_UPLOAD_URL, files=files, headers=headers)
+            resp = await client.post('http://47.101.214.205:8000/api/upload', files=files, headers=headers)
 
+            # 检查响应状态
             if resp.status_code != 200:
                 logger.error(f"上传到tfLink失败，状态码: {resp.status_code}, 响应内容: {resp.text}")
                 return JSONResponse({'error': f'上传到tfLink失败，状态码: {resp.status_code}, 详情: {resp.text[:200]}'}, status_code=500)
             
             try:
+                # 解析JSON响应
                 data = resp.json()
                 logger.info(f"tfLink原始响应: {data}")
                 
+                # 获取下载链接
                 tmp_url = None
                 possible_keys = ['downloadLink', 'download_link', 'url', 'direct_link', 'link', 'download_url']
                 for key in possible_keys:
@@ -630,14 +689,10 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                     logger.error(f"无法从响应中提取URL: {data}")
                     return JSONResponse({'error': f'上传成功但无法从响应中提取URL'}, status_code=500)
                 
+                # 确保URL有效
                 if not tmp_url.startswith(('http://', 'https://')):
                     logger.error(f"无效的URL格式: {tmp_url}")
                     return JSONResponse({'error': f'无效的URL格式: {tmp_url}'}, status_code=500)
-                
-                # 验证 URL 主机名是否在白名单中（SSRF 防护）
-                if not _is_safe_tflink_url(tmp_url):
-                    logger.error(f"URL 主机名不在白名单中: {tmp_url}")
-                    return JSONResponse({'error': '返回的文件URL不在允许的主机列表中'}, status_code=403)
                     
                 # 测试URL是否可访问
                 test_resp = await client.head(tmp_url, timeout=10)
@@ -653,6 +708,8 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                 return JSONResponse({'error': f'上传成功但响应格式无法解析: {raw_text[:200]}'}, status_code=500)
         
         # 3. 用直链注册音色
+        # 使用 get_model_api_config('tts_custom') 获取正确的 API 配置
+        # tts_custom 会优先使用自定义 TTS API，其次是 Qwen Cosyvoice API（目前唯一支持 voice clone 的服务）
         tts_config = _config_manager.get_model_api_config('tts_custom')
         audio_api_key = tts_config.get('api_key', '')
         
@@ -669,12 +726,13 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
         
         # 重试配置
         max_retries = 3
-        retry_delay = 3
+        retry_delay = 3  # 重试前等待的秒数
         
         for attempt in range(max_retries):
             try:
                 logger.info(f"开始音色注册（尝试 {attempt + 1}/{max_retries}），使用URL: {tmp_url}")
                 
+                # 尝试执行音色注册
                 voice_id = service.create_voice(target_model=target_model, prefix=prefix, url=tmp_url)
                     
                 logger.info(f"音色注册成功，voice_id: {voice_id}")
@@ -688,8 +746,10 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                     _config_manager.save_voice_for_current_api(voice_id, voice_data)
                     logger.info(f"voice_id已保存到音色库: {voice_id}")
                     
-                    await asyncio.sleep(0.1)
+                    # 验证voice_id是否能被正确读取（添加短暂延迟，避免文件系统延迟）
+                    await asyncio.sleep(0.1)  # 等待100ms，确保文件写入完成
                     
+                    # 最多验证3次，每次间隔100ms
                     validation_success = False
                     for validation_attempt in range(3):
                         if _config_manager.validate_voice_id(voice_id):
@@ -701,6 +761,8 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                     
                     if not validation_success:
                         logger.warning(f"voice_id保存后验证失败，但可能已成功保存: {voice_id}")
+                        # 不返回错误，因为保存可能已成功，只是验证失败
+                        # 继续返回成功，让用户尝试使用
                     
                 except Exception as save_error:
                     logger.error(f"保存voice_id到音色库失败: {save_error}")
@@ -721,18 +783,22 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                 logger.error(f"音色注册失败（尝试 {attempt + 1}/{max_retries}）: {str(e)}")
                 error_detail = str(e)
                 
+                # 检查是否是超时错误
                 is_timeout = ("ResponseTimeout" in error_detail or 
                              "response timeout" in error_detail.lower() or
                              "timeout" in error_detail.lower())
                 
+                # 检查是否是文件下载失败错误
                 is_download_failed = ("download audio failed" in error_detail or 
                                      "415" in error_detail)
                 
+                # 如果是超时或下载失败，且还有重试机会，则重试
                 if (is_timeout or is_download_failed) and attempt < max_retries - 1:
                     logger.warning(f"检测到{'超时' if is_timeout else '文件下载失败'}错误，等待 {retry_delay} 秒后重试...")
                     await asyncio.sleep(retry_delay)
-                    continue
+                    continue  # 重试
                 
+                # 如果是最后一次尝试或非可重试错误，返回错误
                 if is_timeout:
                     return JSONResponse({
                         'error': f'音色注册超时，已尝试{max_retries}次',
@@ -748,6 +814,7 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                         'suggestion': '请检查文件URL是否可访问，或稍后重试'
                     }, status_code=415)
                 else:
+                    # 其他错误直接返回
                     return JSONResponse({
                         'error': f'音色注册失败: {error_detail}',
                         'file_url': tmp_url,
@@ -755,6 +822,7 @@ async def voice_clone(file: UploadFile = File(...), prefix: str = Form(...)):
                         'max_retries': max_retries
                     }, status_code=500)
     except Exception as e:
+        # 确保tmp_url在出现异常时也有定义
         tmp_url = locals().get('tmp_url', '未获取到URL')
         logger.error(f"注册音色时发生未预期的错误: {str(e)}")
         return JSONResponse({'error': f'注册音色时发生错误: {str(e)}', 'file_url': tmp_url}, status_code=500)

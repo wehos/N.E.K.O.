@@ -169,9 +169,40 @@ logger, log_config = setup_logging(service_name="Main", log_level=logging.INFO, 
 _config_manager = get_config_manager()
 
 def cleanup():
+    """应用关闭时执行清理"""
     logger.info("Starting cleanup process")
+    
+    # 关闭同步服务器连接（线程只能协作式终止）
+    logger.info("Shutting down sync connector threads")
+    for k in sync_process:
+        if sync_process[k] is not None:
+            try:
+                if k in sync_shutdown_event:
+                    sync_shutdown_event[k].set()
+                sync_process[k].join(timeout=3)  # 等待线程正常结束
+                if sync_process[k].is_alive():
+                    logger.warning(f"⚠️ 同步连接器线程 {k} 未能在超时内停止，将作为daemon线程随主进程退出")
+                else:
+                    logger.info(f"✅ 同步连接器线程 {k} 已停止")
+            except Exception as e:
+                logger.warning(f"停止同步连接器线程 {k} 时出错: {e}")
+    logger.info("同步连接器线程已停止")
+    
+    # 向memory_server发送关闭信号
+    try:
+        import httpx
+        shutdown_url = f"http://localhost:{MEMORY_SERVER_PORT}/shutdown"
+        with httpx.Client(timeout=2) as client:
+            response = client.post(shutdown_url)
+            if response.status_code == 200:
+                logger.info("已向memory_server发送关闭信号")
+            else:
+                logger.warning(f"向memory_server发送关闭信号失败，状态码: {response.status_code}")
+    except Exception as e:
+        logger.warning(f"向memory_server发送关闭信号时出错: {e}")
+    
+    # 清空队列（queue.Queue 没有 close/join_thread 方法）
     for k in sync_message_queue:
-        # 清空队列（queue.Queue 没有 close/join_thread 方法）
         try:
             while sync_message_queue[k] and not sync_message_queue[k].empty():
                 sync_message_queue[k].get_nowait()
@@ -406,11 +437,12 @@ if _IS_MAIN_PROCESS:
         app.mount("/user_live2d", CustomStaticFiles(directory=user_live2d_path), name="user_live2d")
         logger.info(f"已挂载用户Live2D目录: {user_live2d_path}")
 
-    # 挂载用户mod路径
+    # 挂载用户mod路径（同时挂载为 /user_mods 和 /workshop 以保持兼容性）
     user_mod_path = _config_manager.get_workshop_path()
     if os.path.exists(user_mod_path) and os.path.isdir(user_mod_path):
         app.mount("/user_mods", CustomStaticFiles(directory=user_mod_path), name="user_mods")
-        logger.info(f"已挂载用户mod路径: {user_mod_path}")
+        app.mount("/workshop", CustomStaticFiles(directory=user_mod_path), name="workshop")
+        logger.info(f"已挂载用户mod路径: {user_mod_path} (作为 /user_mods 和 /workshop)")
 
 # --- Initialize Shared State and Mount Routers ---
 # Import and mount routers from main_routers package
@@ -552,6 +584,27 @@ if __name__ == "__main__":
     def shutdown_server():
         logger.info("收到浏览器关闭信号，正在关闭服务器...")
         os.kill(os.getpid(), signal.SIGTERM)
+
+    # 3) 如果启用了浏览器模式，在服务器启动完成后打开浏览器
+    if args.open_browser:
+        import threading
+        
+        def launch_browser_delayed():
+            # 等待一小段时间确保服务器完全启动
+            import time
+            time.sleep(1)
+            # 从 app.state 获取配置
+            config = get_start_config()
+            url = f"http://127.0.0.1:{MAIN_SERVER_PORT}/{config['browser_page']}"
+            try:
+                webbrowser.open(url)
+                logger.info(f"服务器启动完成，已打开浏览器访问: {url}")
+            except Exception as e:
+                logger.error(f"打开浏览器失败: {e}")
+        
+        # 在独立线程中启动浏览器
+        t = threading.Thread(target=launch_browser_delayed, daemon=True)
+        t.start()
 
     # 4) 启动服务器（阻塞，直到 server.should_exit=True）
     logger.info("--- Starting FastAPI Server ---")

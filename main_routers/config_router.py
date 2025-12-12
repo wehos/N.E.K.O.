@@ -35,27 +35,22 @@ async def get_page_config(lanlan_name: str = ""):
         # 如果提供了 lanlan_name 参数，使用它；否则使用当前角色
         target_name = lanlan_name if lanlan_name else her_name
         
-        # 调用 live2d_router 中的 get_current_live2d_model 获取完整模型信息
+        # 获取 live2d 和 live2d_item_id 字段
+        live2d = lanlan_basic_config.get(target_name, {}).get('live2d', 'mao_pro')
+        live2d_item_id = lanlan_basic_config.get(target_name, {}).get('live2d_item_id', '')
+        
+        logger.debug(f"获取页面配置 - 角色: {target_name}, 模型: {live2d}, item_id: {live2d_item_id}")
+        
+        # 使用 get_current_live2d_model 函数获取正确的模型信息
+        # 第一个参数是角色名称，第二个参数是item_id
         from .live2d_router import get_current_live2d_model
-        live2d_result = await get_current_live2d_model(catgirl_name=target_name)
-        
-        # 从响应中提取模型信息
-        if hasattr(live2d_result, 'body'):
-            result_data = json.loads(live2d_result.body.decode())
-        elif isinstance(live2d_result, dict):
-            result_data = live2d_result
-        else:
-            raise TypeError(f"Unexpected live2d_result type: {type(live2d_result)!r}")
-        
-        model_path = None
-        if result_data.get('success') and result_data.get('model_info'):
-            model_path = result_data['model_info'].get('path')
-        
-        # 如果无法从 get_current_live2d_model 获取，回退到原有逻辑
-        if not model_path:
-            live2d = lanlan_basic_config.get(target_name, {}).get('live2d', 'mao_pro')
-            models = find_models()
-            model_path = next((m["path"] for m in models if m["name"] == live2d), find_model_config_file(live2d))
+        model_response = await get_current_live2d_model(target_name, live2d_item_id)
+        # 提取JSONResponse中的内容
+        model_data = model_response.body.decode('utf-8')
+        import json
+        model_json = json.loads(model_data)
+        model_info = model_json.get('model_info', {})
+        model_path = model_info.get('path', '')
         
         return {
             "success": True,
@@ -63,8 +58,13 @@ async def get_page_config(lanlan_name: str = ""):
             "model_path": model_path
         }
     except Exception as e:
-        logger.error(f"获取页面配置失败: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"获取页面配置失败: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "lanlan_name": "",
+            "model_path": ""
+        }
 
 
 @router.get("/preferences")
