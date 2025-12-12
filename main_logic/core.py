@@ -17,9 +17,9 @@ from utils.frontend_utils import contains_chinese, replace_blank, replace_corner
     is_only_punctuation, split_paragraph
 from utils.audio import make_wav_header
 from utils.screenshot_utils import process_screen_data
-from main_helper.omni_realtime_client import OmniRealtimeClient
-from main_helper.omni_offline_client import OmniOfflineClient
-from main_helper.tts_helper import get_tts_worker
+from main_logic.omni_realtime_client import OmniRealtimeClient
+from main_logic.omni_offline_client import OmniOfflineClient
+from main_logic.tts_client import get_tts_worker
 import base64
 from config import MEMORY_SERVER_PORT
 from utils.config_manager import get_config_manager
