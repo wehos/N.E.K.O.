@@ -11,6 +11,7 @@ import os
 import json
 import glob
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -34,13 +35,38 @@ async def get_recent_files():
 async def get_recent_file(filename: str):
     """获取指定 recent*.json 文件内容"""
     _config_manager = get_config_manager()
-    file_path = str(_config_manager.memory_dir / filename)
+    
+    # Security: Reject filenames with path separators or parent directory references
+    if os.path.sep in filename or '/' in filename or '..' in filename:
+        return JSONResponse({"success": False, "error": "文件名不合法: 包含非法路径字符"}, status_code=400)
+    
+    # Validate filename format
     if not (filename.startswith('recent') and filename.endswith('.json')):
         return JSONResponse({"success": False, "error": "文件名不合法"}, status_code=400)
-    if not os.path.exists(file_path):
+    
+    # Construct and resolve the target path
+    memory_dir = Path(_config_manager.memory_dir).resolve()
+    file_path = (memory_dir / filename).resolve()
+    
+    # Security: Verify the resolved path is inside the memory directory
+    try:
+        if not file_path.is_relative_to(memory_dir):
+            return JSONResponse({"success": False, "error": "文件名不合法: 路径遍历被拒绝"}, status_code=400)
+    except ValueError:
+        # is_relative_to may raise ValueError on some edge cases
+        return JSONResponse({"success": False, "error": "文件名不合法: 路径遍历被拒绝"}, status_code=400)
+    
+    if not file_path.exists():
         return JSONResponse({"success": False, "error": "文件不存在"}, status_code=404)
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+    
+    # Read file with exception handling for IO/Unicode errors
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except (IOError, OSError, UnicodeDecodeError) as e:
+        logger.error(f"读取文件失败 {filename}: {e}")
+        return JSONResponse({"success": False, "error": "读取文件失败"}, status_code=500)
+    
     return {"content": content}
 
 

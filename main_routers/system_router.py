@@ -18,7 +18,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APITimeoutError
 
 from .shared_state import get_steamworks, get_config_manager
 from config import MEMORY_SERVER_PORT, get_extra_body
@@ -27,7 +27,7 @@ from utils.workshop_utils import get_workshop_path
 
 router = APIRouter(tags=["system"])
 logger = logging.getLogger("Main")
-
+_background_tasks: set[asyncio.Task] = set()
 
 def _get_app_root():
     """获取应用程序根目录"""
@@ -40,9 +40,10 @@ def _get_app_root():
         return os.getcwd()
 
 
-def get_start_config():
-    """从 app.state 获取启动配置 - 需要从外部设置"""
-    # This function needs to be set up by main_server to access app.state
+def _get_start_config_from_app(app):
+    """从 app.state 获取启动配置"""
+    if hasattr(app, 'state') and hasattr(app.state, 'start_config'):
+        return app.state.start_config
     return {
         "browser_mode_enabled": False,
         "browser_page": "chara_manager",
@@ -51,13 +52,13 @@ def get_start_config():
 
 
 @router.post('/api/beacon/shutdown')
-async def beacon_shutdown():
+async def beacon_shutdown(request: Request):
     """Beacon API for graceful server shutdown"""
     try:
-        current_config = get_start_config()
+        current_config = _get_start_config_from_app(request.app)
         if current_config['browser_mode_enabled']:
             logger.info("收到beacon信号，准备关闭服务器...")
-            task = asyncio.create_task(shutdown_server_async())
+            task = asyncio.create_task(shutdown_server_async(request.app))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
             return {"success": True, "message": "服务器关闭信号已接收"}
@@ -67,7 +68,7 @@ async def beacon_shutdown():
         return {"success": False, "error": str(e)}
 
 
-async def shutdown_server_async():
+async def shutdown_server_async(app):
     """异步关闭服务器"""
     try:
         await asyncio.sleep(0.5)
@@ -83,7 +84,7 @@ async def shutdown_server_async():
         except Exception as e:
             logger.warning(f"向memory_server发送关闭信号时出错: {e}")
         
-        current_config = get_start_config()
+        current_config = _get_start_config_from_app(app)
         if current_config['server'] is not None:
             current_config['server'].should_exit = True
     except Exception as e:
@@ -114,7 +115,7 @@ async def emotion_analysis(request: Request):
                 "error": "情绪分析模型配置缺失"
             }, status_code=500)
         
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=5.0)
         
         extra_body = get_extra_body(model)
         
@@ -131,6 +132,9 @@ async def emotion_analysis(request: Request):
         
         return {"success": True, "emotion": emotion}
         
+    except APITimeoutError as e:
+        logger.error(f"情绪分析请求超时: {e}")
+        return JSONResponse({"success": False, "error": "情绪分析请求超时"}, status_code=504)
     except Exception as e:
         logger.error(f"情绪分析失败: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -172,8 +176,12 @@ async def set_achievement_status(name: str):
                         logger.error(f"设置成就失败: {name}，请确认成就ID在Steam后台已配置")
             else:
                 logger.info(f"成就已解锁，无需重复设置: {name}")
+            return JSONResponse(content={"success": True, "message": f"成就 {name} 处理完成"})
         except Exception as e:
             logger.error(f"设置成就失败: {e}")
+            return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+    else:
+       return JSONResponse(content={"success": False, "error": "Steamworks未初始化"}, status_code=503)
 
 
 @router.get('/api/steam/list-achievements')

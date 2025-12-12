@@ -49,7 +49,7 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
         logger.warning(f"❌ 角色 {lanlan_name} 不存在")
         current_catgirl = None
         if session_manager:
-            current_catgirl = list(session_manager.keys())[0]
+            current_catgirl = next(iter(session_manager))
         if current_catgirl:
             try:
                 await websocket.send_text(json.dumps({

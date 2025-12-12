@@ -41,10 +41,11 @@ async def get_page_config(lanlan_name: str = ""):
         
         # 从响应中提取模型信息
         if hasattr(live2d_result, 'body'):
-            import json
             result_data = json.loads(live2d_result.body.decode())
-        else:
+        elif isinstance(live2d_result, dict):
             result_data = live2d_result
+        else:
+            raise TypeError(f"Unexpected live2d_result type: {type(live2d_result)!r}")
         
         model_path = None
         if result_data.get('success') and result_data.get('model_info'):

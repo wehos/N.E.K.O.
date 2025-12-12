@@ -21,15 +21,6 @@ async def get_default_index(request: Request):
     })
 
 
-@router.get("/{lanlan_name}", response_class=HTMLResponse)
-async def get_index(request: Request, lanlan_name: str):
-    templates = get_templates()
-    return templates.TemplateResponse("templates/index.html", {
-        "request": request,
-        "lanlan_name": lanlan_name
-    })
-
-
 @router.get("/l2d", response_class=HTMLResponse)
 async def get_l2d_manager(request: Request):
     """渲染Live2D模型管理器页面"""
@@ -92,3 +83,14 @@ async def steam_workshop_manager_page(request: Request, lanlan_name: str = ""):
 async def memory_browser(request: Request):
     templates = get_templates()
     return templates.TemplateResponse("templates/memory_browser.html", {"request": request})
+
+
+# IMPORTANT: This catch-all route MUST be registered LAST
+# to avoid matching static paths like /l2d, /api_key, /memory_browser, etc.
+@router.get("/{lanlan_name}", response_class=HTMLResponse)
+async def get_index(request: Request, lanlan_name: str):
+    templates = get_templates()
+    return templates.TemplateResponse("templates/index.html", {
+        "request": request,
+        "lanlan_name": lanlan_name
+    })

@@ -55,10 +55,12 @@ async def update_agent_flags(request: Request):
         for key, value in data.items():
             if key in FRONTEND_TO_INTERNAL:
                 internal_key = FRONTEND_TO_INTERNAL[key]
+                if not isinstance(value, bool):
+                    continue
                 mapped_flags[internal_key] = value
         
         # Update each session manager using the proper method
-        for lanlan_name, mgr in session_manager.items():
+        for _lanlan_name, mgr in session_manager.items():
             if hasattr(mgr, 'update_agent_flags'):
                 mgr.update_agent_flags(mapped_flags)
             elif hasattr(mgr, 'agent_flags'):

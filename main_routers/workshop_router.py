@@ -245,13 +245,22 @@ async def get_subscribed_workshop_items():
                     item_info["state"]["downloading"] = False
                 
                 # 尝试通过UGC API获取详细信息
+                query_handle = None
                 try:
                     logger.debug(f'使用官方推荐方法获取物品 {item_id} 的详细信息')
                     query_handle = steamworks.Workshop.CreateQueryUGCDetailsRequest([item_id])
                     
                     if query_handle:
-                        steamworks.Workshop.SendQueryUGCRequest(query_handle)
-                        time.sleep(0.5)  # 等待查询完成
+                        # Define a callback for UGC query completion
+                        def ugc_query_callback(result):
+                            logger.debug(f"UGC query callback received for item {item_id}")
+                        
+                        steamworks.Workshop.SendQueryUGCRequest(
+                            query_handle,
+                            callback=ugc_query_callback,
+                            override_callback=True
+                        )
+                        await asyncio.sleep(0.5)  # 等待查询完成
                         
                         try:
                             result = steamworks.Workshop.GetQueryUGCResult(query_handle, 0)
@@ -273,6 +282,10 @@ async def get_subscribed_workshop_items():
                             logger.warning(f"获取查询结果时出错: {query_error}")
                 except Exception as api_error:
                     logger.warning(f"使用官方API获取物品 {item_id} 详情时出错: {api_error}")
+                finally:
+                    # Note: ReleaseQueryUGCRequest is not available in the current steamworks wrapper
+                    # Query handle release would be done here if the method was available
+                    query_handle = None
                 
                 # 从本地文件获取信息（备选方案）
                 if item_info['title'].startswith('未知物品_') or not item_info['description']:
@@ -435,11 +448,21 @@ async def get_workshop_item_details(item_id: str):
             "message": "请确保Steam客户端已运行且已登录"
         }, status_code=503)
     
+    query_handle = None
     try:
         item_id_int = int(item_id)
         item_state = steamworks.Workshop.GetItemState(item_id_int)
         query_handle = steamworks.Workshop.CreateQueryUGCDetailsRequest([item_id_int])
-        steamworks.Workshop.SendQueryUGCRequest(query_handle)
+        
+        # Define a callback for UGC query completion
+        def ugc_query_callback(result):
+            logger.debug(f"UGC query callback received for item {item_id}")
+        
+        steamworks.Workshop.SendQueryUGCRequest(
+            query_handle,
+            callback=ugc_query_callback,
+            override_callback=True
+        )
         result = steamworks.Workshop.GetQueryUGCResult(query_handle, 0)
         
         if result:
@@ -518,6 +541,10 @@ async def get_workshop_item_details(item_id: str):
             "success": False,
             "error": f"获取物品详情失败: {str(e)}"
         }, status_code=500)
+    finally:
+        # Note: ReleaseQueryUGCRequest is not available in the current steamworks wrapper
+        # Query handle release would be done here if the method was available
+        query_handle = None
 
 
 @router.post('/api/steam/workshop/item/unsubscribe')
