@@ -209,8 +209,9 @@ function init_app() {
     let proactiveChatEnabled = false;
     let proactiveVisionEnabled = false;
     let proactiveChatTimer = null;
-    let proactiveChatBackoffLevel = 0; // 退避级别：0=30s, 1=1min, 2=2min, 3=4min, etc.
+    let proactiveChatBackoffLevel = 0; // 退避级别：0=30s, 1=75s, 2=187.5s, etc.
     const PROACTIVE_CHAT_BASE_DELAY = 30000; // 30秒基础延迟
+    let lastUserInputTime = 0; // 用户最后一次文本输入时间戳
 
     // 截图最大尺寸（720p，用于节流数据传输）
     const MAX_SCREENSHOT_WIDTH = 1280;
@@ -1568,7 +1569,8 @@ function init_app() {
             return;
         }
 
-        // 用户主动发送文本时，重置主动搭话计时器
+        // 用户主动发送文本时，记录时间戳并重置主动搭话计时器
+        lastUserInputTime = Date.now();
         resetProactiveChatBackoff();
 
         // 如果还没有启动session，先启动
@@ -4743,8 +4745,8 @@ function init_app() {
             return;
         }
 
-        // 计算延迟时间（指数退避）
-        const delay = PROACTIVE_CHAT_BASE_DELAY * Math.pow(2, proactiveChatBackoffLevel);
+        // 计算延迟时间（指数退避，倍率2.5）
+        const delay = PROACTIVE_CHAT_BASE_DELAY * Math.pow(2.5, proactiveChatBackoffLevel);
         console.log(`主动搭话：${delay / 1000}秒后触发（退避级别：${proactiveChatBackoffLevel}）`);
 
         proactiveChatTimer = setTimeout(async () => {
@@ -4791,22 +4793,19 @@ function init_app() {
                 }
             } else if (proactiveVisionEnabled) {
                 // 只开启主动视觉时：
-                // Windows: 50%截图, 50%窗口标题
-                // 非Windows: 100%截图
-                if (isWindows) {
-                    if (Math.random() < 0.5) {
-                        useScreenshot = true;
-                        console.log('主动搭话模式：仅视觉模式(Windows)，使用截图搭话');
-                    } else {
-                        useWindowTitle = true;
-                        console.log('主动搭话模式：仅视觉模式(Windows)，使用窗口标题搭话');
-                    }
+                // Windows和非Windows都是100%截图
+                useScreenshot = true;
+                console.log('主动搭话模式：仅视觉模式，使用截图搭话');
+            } else if (proactiveChatEnabled && isWindows) {
+                // 只开启主动搭话时(Windows)：50%窗口标题, 50%热门内容
+                if (Math.random() < 0.5) {
+                    useWindowTitle = true;
+                    console.log('主动搭话模式：仅搭话模式(Windows)，使用窗口标题搭话');
                 } else {
-                    useScreenshot = true;
-                    console.log('主动搭话模式：仅视觉模式，使用截图搭话');
+                    console.log('主动搭话模式：仅搭话模式(Windows)，使用热门内容');
                 }
             } else if (proactiveChatEnabled) {
-                // 只开启主动搭话时：100%热门内容
+                // 只开启主动搭话时(非Windows)：100%热门内容
                 useScreenshot = false;
                 useWindowTitle = false;
                 console.log('主动搭话模式：仅搭话模式，使用热门内容');
@@ -4889,6 +4888,13 @@ function init_app() {
 
             if (result.success) {
                 if (result.action === 'chat') {
+                    // 检测用户是否在20秒内有过输入
+                    const timeSinceLastInput = Date.now() - lastUserInputTime;
+                    if (timeSinceLastInput < 20000) {
+                        console.log(`主动搭话作废：用户在${Math.round(timeSinceLastInput / 1000)}秒前有过输入`);
+                        return;
+                    }
+                    
                     console.log('主动搭话已发送:', result.message);
                     // 后端会直接通过session发送消息和TTS，前端无需处理显示
                 } else if (result.action === 'pass') {

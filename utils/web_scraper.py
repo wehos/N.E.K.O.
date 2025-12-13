@@ -10,6 +10,8 @@ import platform
 from typing import Dict, List, Any, Optional, Union
 import logging
 from urllib.parse import quote
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +331,78 @@ def get_active_window_title(include_raw: bool = False) -> Optional[Union[str, Di
         return None
 
 
+async def generate_diverse_queries(window_title: str) -> List[str]:
+    """
+    使用LLM基于窗口标题生成3个多样化的搜索关键词
+    
+    Args:
+        window_title: 窗口标题
+    
+    Returns:
+        包含3个搜索关键词的列表
+    """
+    try:
+        # 导入配置管理器
+        from utils.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        # 使用correction模型配置（或者使用emotion等轻量级模型）
+        correction_config = config_manager.get_model_api_config('correction')
+        
+        llm = ChatOpenAI(
+            model=correction_config['model'],
+            base_url=correction_config['base_url'],
+            api_key=correction_config['api_key'],
+            temperature=0.8,  # 提高temperature以获得更多样化的结果
+            timeout=10.0
+        )
+        
+        prompt = f"""基于以下窗口标题，生成3个不同的搜索关键词，用于在百度上搜索相关内容。
+
+窗口标题：{window_title}
+
+要求：
+1. 生成3个不同角度的搜索关键词
+2. 关键词应该简洁（2-8个字）
+3. 关键词应该多样化，涵盖不同方面
+4. 只输出3个关键词，每行一个，不要添加任何序号、标点或其他内容
+
+示例输出格式：
+关键词1
+关键词2
+关键词3"""
+
+        response = llm.invoke([SystemMessage(content=prompt)])
+        
+        # 解析响应，提取3个关键词
+        queries = []
+        lines = response.content.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            # 移除可能的序号、标点等
+            line = re.sub(r'^[\d\.\-\*\)\]】]+\s*', '', line)
+            line = line.strip('.,;:，。；：')
+            if line and len(line) >= 2:
+                queries.append(line)
+                if len(queries) >= 3:
+                    break
+        
+        # 如果生成的查询不足3个，用原始标题填充
+        if len(queries) < 3:
+            clean_title = clean_window_title(window_title)
+            while len(queries) < 3 and clean_title:
+                queries.append(clean_title)
+        
+        logger.info(f"为窗口标题「{window_title}」生成的查询关键词: {queries}")
+        return queries[:3]
+        
+    except Exception as e:
+        logger.warning(f"生成多样化查询失败，使用默认清理方法: {e}")
+        # 失败时回退到原始清理方法
+        clean_title = clean_window_title(window_title)
+        return [clean_title, clean_title, clean_title]
+
+
 def clean_window_title(title: str) -> str:
     """
     清理窗口标题，提取有意义的搜索关键词
@@ -577,10 +651,10 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
         sanitized_title = title_result['sanitized']
         raw_title = title_result['raw']
         
-        # 清理窗口标题以获取搜索关键词（使用原始标题以获得更好的搜索结果）
-        search_query = clean_window_title(raw_title)
+        # 使用LLM生成3个多样化的搜索查询
+        search_queries = await generate_diverse_queries(raw_title)
         
-        if not search_query or len(search_query) < 2:
+        if not search_queries or all(not q or len(q) < 2 for q in search_queries):
             return {
                 'success': False,
                 'error': '窗口标题无法提取有效的搜索关键词',
@@ -588,17 +662,48 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
             }
         
         # 日志中使用截断版本
-        logger.info(f"从窗口标题「{sanitized_title}」提取搜索关键词: {search_query}")
+        logger.info(f"从窗口标题「{sanitized_title}」生成多样化查询: {search_queries}")
         
-        # 进行百度搜索
-        search_result = await search_baidu(search_query, limit)
+        # 依次使用每个查询进行搜索，合并结果
+        all_results = []
+        successful_queries = []
+        
+        for query in search_queries:
+            if not query or len(query) < 2:
+                continue
+                
+            logger.info(f"使用查询关键词: {query}")
+            search_result = await search_baidu(query, limit)
+            
+            if search_result.get('success') and search_result.get('results'):
+                all_results.extend(search_result['results'])
+                successful_queries.append(query)
+        
+        # 去重（基于URL）
+        seen_urls = set()
+        unique_results = []
+        for result in all_results:
+            url = result.get('url', '')
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_results.append(result)
+        
+        # 限制总结果数量
+        unique_results = unique_results[:limit * 2]  # 多返回一些结果
+        
+        if not unique_results:
+            return {
+                'success': False,
+                'error': '所有查询均未获得搜索结果',
+                'window_title': sanitized_title,
+                'search_queries': search_queries
+            }
         
         return {
-            'success': search_result.get('success', False),
+            'success': True,
             'window_title': sanitized_title,  # 默认返回截断版本
-            'search_query': search_query,
-            'search_results': search_result.get('results', []),
-            'error': search_result.get('error') if not search_result.get('success') else None
+            'search_queries': successful_queries,  # 返回成功的查询列表
+            'search_results': unique_results,
         }
         
     except Exception as e:
@@ -625,11 +730,18 @@ def format_window_context_content(content: Dict[str, Any]) -> str:
     output_lines = []
     # window_title 现在是截断后的安全版本（来自fetch_window_context_content），不会泄露敏感信息
     window_title = content.get('window_title', '')
-    search_query = content.get('search_query', '')
+    search_queries = content.get('search_queries', [])
     results = content.get('search_results', [])
     
     output_lines.append(f"【当前活跃窗口】{window_title}")
-    output_lines.append(f"【搜索关键词】{search_query}")
+    
+    # 显示所有使用的搜索关键词
+    if search_queries:
+        if len(search_queries) == 1:
+            output_lines.append(f"【搜索关键词】{search_queries[0]}")
+        else:
+            output_lines.append(f"【搜索关键词】{', '.join(search_queries)}")
+    
     output_lines.append("")
     output_lines.append("【相关信息】")
     
