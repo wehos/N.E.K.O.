@@ -249,15 +249,13 @@ def format_trending_content(trending_content: Dict[str, Any]) -> str:
         for i, video in enumerate(videos[:5], 1):  # 只取前5个
             title = video.get('title', '')
             author = video.get('author', '')
-            view = video.get('view', 0)
             like = video.get('like', 0)
             
-            # 格式化播放量和点赞数
-            view_str = f"{view//10000}万" if view >= 10000 else str(view)
+            # 格式化点赞数
             like_str = f"{like//10000}万" if like >= 10000 else str(like)
             
             output_lines.append(f"{i}. {title}")
-            output_lines.append(f"   UP主: {author} | 播放: {view_str} | 点赞: {like_str}")
+            output_lines.append(f"   UP主: {author} | 点赞: {like_str}")
         
         output_lines.append("")  # 空行
     
