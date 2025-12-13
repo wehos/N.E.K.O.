@@ -50,11 +50,11 @@ def _safe_get_int_env(env_var: str, default: int) -> int:
         int_value = int(value)
         # 检查是否为非负整数
         if int_value < 0:
-            logger.warning(f"环境变量 {env_var} 包含负值 {int_value}，使用默认值 {default}")
+            logger.warning("环境变量 %s 包含负值 %s，使用默认值 %s", env_var, int_value, default)
             return default
         return int_value
     except ValueError as e:
-        logger.warning(f"环境变量 {env_var} 的值 '{value}' 无法解析为整数，使用默认值 {default}: {e}")
+        logger.warning("环境变量 %s 的值 %r 无法解析为整数，使用默认值 %s: %s", env_var, value, default, e)
         return default
 
 
@@ -194,6 +194,13 @@ def optimize_response(text: str,
     if max_words is None:
         max_words = DEFAULT_MAX_WORDS
 
+    # 允许上游误传字符串等，避免直接炸掉喵
+    try:
+        max_words_int = int(max_words)
+    except (TypeError, ValueError) as e:
+        logger.warning("max_words=%r 无法解析为整数，回退默认值 %s: %s", max_words, DEFAULT_MAX_WORDS, e)
+        max_words_int = DEFAULT_MAX_WORDS
+
     # 1) 规范空白
     text = re.sub(r'\s+', ' ', text)
 
@@ -214,8 +221,8 @@ def optimize_response(text: str,
     start, end = enclosure
     
     # 计算有效的最大长度，预留包裹符空间
-    if max_words and int(max_words) > 0:
-        maxw = int(max_words)
+    if max_words_int > 0:
+        maxw = max_words_int
         # 预留包裹符长度
         enclosure_len = len(start) + len(end)
         effective_maxw = maxw - enclosure_len
