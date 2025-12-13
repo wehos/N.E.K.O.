@@ -4673,20 +4673,52 @@ function init_app() {
 
     async function triggerProactiveChat() {
         try {
-            // 根据三种模式决定使用哪种搭话方式
+            // 根据模式决定使用哪种搭话方式
+            // Windows系统下支持三种模式：截图、窗口标题搜索、热门内容
+            // 非Windows系统下只支持截图和热门内容
             let useScreenshot = false;
+            let useWindowTitle = false;
+            const isWindows = navigator.platform.toLowerCase().includes('win');
 
             if (proactiveChatEnabled && proactiveVisionEnabled) {
-                // 两个都开启时：各50%
-                useScreenshot = Math.random() < 0.5;
-                console.log(`主动搭话模式：双开模式，使用${useScreenshot ? '截图搭话' : '热门内容'}`);
+                // 两个都开启时：
+                // Windows: 1/3截图, 1/3窗口标题, 1/3热门内容
+                // 非Windows: 50%截图, 50%热门内容
+                if (isWindows) {
+                    const rand = Math.random();
+                    if (rand < 0.33) {
+                        useScreenshot = true;
+                        console.log('主动搭话模式：双开模式(Windows)，使用截图搭话');
+                    } else if (rand < 0.66) {
+                        useWindowTitle = true;
+                        console.log('主动搭话模式：双开模式(Windows)，使用窗口标题搭话');
+                    } else {
+                        console.log('主动搭话模式：双开模式(Windows)，使用热门内容');
+                    }
+                } else {
+                    useScreenshot = Math.random() < 0.5;
+                    console.log(`主动搭话模式：双开模式，使用${useScreenshot ? '截图搭话' : '热门内容'}`);
+                }
             } else if (proactiveVisionEnabled) {
-                // 只开启主动视觉时：100%屏幕截图搭话
-                useScreenshot = true;
-                console.log('主动搭话模式：仅视觉模式，使用截图搭话');
+                // 只开启主动视觉时：
+                // Windows: 50%截图, 50%窗口标题
+                // 非Windows: 100%截图
+                if (isWindows) {
+                    if (Math.random() < 0.5) {
+                        useScreenshot = true;
+                        console.log('主动搭话模式：仅视觉模式(Windows)，使用截图搭话');
+                    } else {
+                        useWindowTitle = true;
+                        console.log('主动搭话模式：仅视觉模式(Windows)，使用窗口标题搭话');
+                    }
+                } else {
+                    useScreenshot = true;
+                    console.log('主动搭话模式：仅视觉模式，使用截图搭话');
+                }
             } else if (proactiveChatEnabled) {
                 // 只开启主动搭话时：100%热门内容
                 useScreenshot = false;
+                useWindowTitle = false;
                 console.log('主动搭话模式：仅搭话模式，使用热门内容');
             } else {
                 // 两个都关闭，不执行搭话
@@ -4703,9 +4735,15 @@ function init_app() {
                 const screenshotDataUrl = await captureProactiveChatScreenshot();
 
                 if (!screenshotDataUrl) {
-                    console.log('主动搭话截图失败，退回使用热门内容搭话');
-                    // 截图失败时，如果主动搭话功能开启，则退回使用热门内容
-                    if (proactiveChatEnabled) {
+                    console.log('主动搭话截图失败，退回使用其他方式');
+                    // 截图失败时的回退策略
+                    if (isWindows && proactiveChatEnabled) {
+                        // Windows下回退到窗口标题
+                        useScreenshot = false;
+                        useWindowTitle = true;
+                        console.log('已切换到窗口标题搭话模式');
+                    } else if (proactiveChatEnabled) {
+                        // 非Windows或不支持窗口标题时回退到热门内容
                         useScreenshot = false;
                         console.log('已切换到热门内容搭话模式');
                     } else {
@@ -4715,6 +4753,37 @@ function init_app() {
                     }
                 } else {
                     requestBody.screenshot_data = screenshotDataUrl;
+                }
+            }
+
+            if (useWindowTitle && !useScreenshot) {
+                // 使用窗口标题搭话（Windows only）
+                try {
+                    const titleResponse = await fetch('/api/get_window_title');
+                    const titleResult = await titleResponse.json();
+
+                    if (titleResult.success && titleResult.window_title) {
+                        requestBody.window_title = titleResult.window_title;
+                        console.log('成功获取窗口标题:', titleResult.window_title);
+                    } else {
+                        console.log('获取窗口标题失败，退回使用热门内容');
+                        if (proactiveChatEnabled) {
+                            useWindowTitle = false;
+                            console.log('已切换到热门内容搭话模式');
+                        } else {
+                            console.log('获取窗口标题失败且未开启主动搭话，跳过本次搭话');
+                            return;
+                        }
+                    }
+                } catch (error) {
+                    console.error('获取窗口标题时出错:', error);
+                    if (proactiveChatEnabled) {
+                        useWindowTitle = false;
+                        console.log('已切换到热门内容搭话模式');
+                    } else {
+                        console.log('获取窗口标题失败且未开启主动搭话，跳过本次搭话');
+                        return;
+                    }
                 }
             }
 
