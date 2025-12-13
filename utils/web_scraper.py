@@ -336,10 +336,14 @@ async def generate_diverse_queries(window_title: str) -> List[str]:
     使用LLM基于窗口标题生成3个多样化的搜索关键词
     
     Args:
-        window_title: 窗口标题
+        window_title: 窗口标题（应该是已清理的标题，不应包含敏感信息）
     
     Returns:
         包含3个搜索关键词的列表
+    
+    注意：
+        为保护隐私，调用此函数前应先使用clean_window_title()清理标题，
+        避免将文件路径、账号等敏感信息发送给LLM API
     """
     try:
         # 导入配置管理器
@@ -357,6 +361,9 @@ async def generate_diverse_queries(window_title: str) -> List[str]:
             timeout=10.0
         )
         
+        # 清理/脱敏窗口标题用于日志显示
+        sanitized_title = window_title[:30] + '...' if len(window_title) > 30 else window_title
+        
         prompt = f"""基于以下窗口标题，生成3个不同的搜索关键词，用于在百度上搜索相关内容。
 
 窗口标题：{window_title}
@@ -372,7 +379,8 @@ async def generate_diverse_queries(window_title: str) -> List[str]:
 关键词2
 关键词3"""
 
-        response = llm.invoke([SystemMessage(content=prompt)])
+        # 使用异步调用
+        response = await llm.ainvoke([SystemMessage(content=prompt)])
         
         # 解析响应，提取3个关键词
         queries = []
@@ -393,11 +401,14 @@ async def generate_diverse_queries(window_title: str) -> List[str]:
             while len(queries) < 3 and clean_title:
                 queries.append(clean_title)
         
-        logger.info(f"为窗口标题「{window_title}」生成的查询关键词: {queries}")
+        # 使用脱敏后的标题记录日志
+        logger.info(f"为窗口标题「{sanitized_title}」生成的查询关键词: {queries}")
         return queries[:3]
         
     except Exception as e:
-        logger.warning(f"生成多样化查询失败，使用默认清理方法: {e}")
+        # 异常日志中也使用脱敏标题
+        sanitized_title = window_title[:30] + '...' if len(window_title) > 30 else window_title
+        logger.warning(f"为窗口标题「{sanitized_title}」生成多样化查询失败，使用默认清理方法: {e}")
         # 失败时回退到原始清理方法
         clean_title = clean_window_title(window_title)
         return [clean_title, clean_title, clean_title]
@@ -539,22 +550,36 @@ def parse_baidu_results(html_content: str, limit: int = 5) -> List[Dict[str, str
         limit: 结果数量限制
     
     Returns:
-        搜索结果列表
+        搜索结果列表，每个结果包含 title, abstract, url
     """
     results = []
     
     try:
+        from urllib.parse import urljoin
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # 提取搜索结果容器
         containers = soup.find_all('div', class_=lambda x: x and 'c-container' in x, limit=limit * 2)
         
         for container in containers:
-            # 提取标题
+            # 提取标题和链接
             link = container.find('a')
             if link:
                 title = link.get_text(strip=True)
                 if title and 5 < len(title) < 200:
+                    # 提取 URL（处理相对和绝对 URL）
+                    href = link.get('href', '')
+                    if href:
+                        # 如果是相对 URL，转换为绝对 URL
+                        if href.startswith('/'):
+                            url = urljoin('https://www.baidu.com', href)
+                        elif not href.startswith('http'):
+                            url = urljoin('https://www.baidu.com/', href)
+                        else:
+                            url = href
+                    else:
+                        url = ''
+                    
                     # 提取摘要
                     abstract = ""
                     content_span = container.find('span', class_=lambda x: x and 'content-right' in x)
@@ -564,7 +589,8 @@ def parse_baidu_results(html_content: str, limit: int = 5) -> List[Dict[str, str
                     if not any(skip in title.lower() for skip in ['百度', '广告', 'javascript']):
                         results.append({
                             'title': title,
-                            'abstract': abstract
+                            'abstract': abstract,
+                            'url': url
                         })
                         if len(results) >= limit:
                             break
@@ -577,9 +603,22 @@ def parse_baidu_results(html_content: str, limit: int = 5) -> List[Dict[str, str
                 if link:
                     title = link.get_text(strip=True)
                     if title and 5 < len(title) < 200:
+                        # 提取 URL
+                        href = link.get('href', '')
+                        if href:
+                            if href.startswith('/'):
+                                url = urljoin('https://www.baidu.com', href)
+                            elif not href.startswith('http'):
+                                url = urljoin('https://www.baidu.com/', href)
+                            else:
+                                url = href
+                        else:
+                            url = ''
+                        
                         results.append({
                             'title': title,
-                            'abstract': ''
+                            'abstract': '',
+                            'url': url
                         })
         
         logger.info(f"解析到 {len(results)} 条百度搜索结果")
@@ -651,8 +690,12 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
         sanitized_title = title_result['sanitized']
         raw_title = title_result['raw']
         
-        # 使用LLM生成3个多样化的搜索查询
-        search_queries = await generate_diverse_queries(raw_title)
+        # 清理窗口标题以移除敏感信息，避免将原始标题发送给LLM API
+        # 这样可以防止文件路径、账号信息等敏感数据泄露
+        cleaned_title = clean_window_title(raw_title)
+        
+        # 使用清理后的标题生成3个多样化的搜索查询（保护隐私）
+        search_queries = await generate_diverse_queries(cleaned_title)
         
         if not search_queries or all(not q or len(q) < 2 for q in search_queries):
             return {
@@ -679,13 +722,18 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
                 all_results.extend(search_result['results'])
                 successful_queries.append(query)
         
-        # 去重（基于URL）
-        seen_urls = set()
+        # 去重（基于URL，如果URL缺失则基于title）
+        seen_keys = set()
         unique_results = []
         for result in all_results:
             url = result.get('url', '')
-            if url and url not in seen_urls:
-                seen_urls.add(url)
+            title = result.get('title', '')
+            
+            # 优先使用 URL 进行去重，如果 URL 不存在则使用 title
+            dedup_key = url if url else title
+            
+            if dedup_key and dedup_key not in seen_keys:
+                seen_keys.add(dedup_key)
                 unique_results.append(result)
         
         # 限制总结果数量

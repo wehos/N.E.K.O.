@@ -4753,8 +4753,8 @@ function init_app() {
             console.log('触发主动搭话...');
             await triggerProactiveChat();
 
-            // 增加退避级别（最多到4分钟，即level 3）
-            if (proactiveChatBackoffLevel < 3) {
+            // 增加退避级别（最多到约3分钟，即level 2：30s * 2.5^2 = 187.5s）
+            if (proactiveChatBackoffLevel < 2) {
                 proactiveChatBackoffLevel++;
             }
 
