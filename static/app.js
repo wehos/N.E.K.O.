@@ -209,8 +209,9 @@ function init_app() {
     let proactiveChatEnabled = false;
     let proactiveVisionEnabled = false;
     let proactiveChatTimer = null;
-    let proactiveChatBackoffLevel = 0; // 退避级别：0=30s, 1=1min, 2=2min, 3=4min, etc.
+    let proactiveChatBackoffLevel = 0; // 退避级别：0=30s, 1=75s, 2=187.5s, etc.
     const PROACTIVE_CHAT_BASE_DELAY = 30000; // 30秒基础延迟
+    let lastUserInputTime = 0; // 用户最后一次文本输入时间戳
 
     // 截图最大尺寸（720p，用于节流数据传输）
     const MAX_SCREENSHOT_WIDTH = 1280;
@@ -1568,7 +1569,8 @@ function init_app() {
             return;
         }
 
-        // 用户主动发送文本时，重置主动搭话计时器
+        // 用户主动发送文本时，记录时间戳并重置主动搭话计时器
+        lastUserInputTime = Date.now();
         resetProactiveChatBackoff();
 
         // 如果还没有启动session，先启动
@@ -4743,16 +4745,16 @@ function init_app() {
             return;
         }
 
-        // 计算延迟时间（指数退避）
-        const delay = PROACTIVE_CHAT_BASE_DELAY * Math.pow(2, proactiveChatBackoffLevel);
+        // 计算延迟时间（指数退避，倍率2.5）
+        const delay = PROACTIVE_CHAT_BASE_DELAY * Math.pow(2.5, proactiveChatBackoffLevel);
         console.log(`主动搭话：${delay / 1000}秒后触发（退避级别：${proactiveChatBackoffLevel}）`);
 
         proactiveChatTimer = setTimeout(async () => {
             console.log('触发主动搭话...');
             await triggerProactiveChat();
 
-            // 增加退避级别（最多到4分钟，即level 3）
-            if (proactiveChatBackoffLevel < 3) {
+            // 增加退避级别（最多到约3分钟，即level 2：30s * 2.5^2 = 187.5s）
+            if (proactiveChatBackoffLevel < 2) {
                 proactiveChatBackoffLevel++;
             }
 
@@ -4763,20 +4765,49 @@ function init_app() {
 
     async function triggerProactiveChat() {
         try {
-            // 根据三种模式决定使用哪种搭话方式
+            // 根据模式决定使用哪种搭话方式
+            // Windows系统下支持三种模式：截图、窗口标题搜索、热门内容
+            // 非Windows系统下只支持截图和热门内容
             let useScreenshot = false;
+            let useWindowTitle = false;
+            const isWindows = isWindowsOS();
 
             if (proactiveChatEnabled && proactiveVisionEnabled) {
-                // 两个都开启时：各50%
-                useScreenshot = Math.random() < 0.5;
-                console.log(`主动搭话模式：双开模式，使用${useScreenshot ? '截图搭话' : '热门内容'}`);
+                // 两个都开启时：
+                // Windows: 1/3截图, 1/3窗口标题, 1/3热门内容
+                // 非Windows: 50%截图, 50%热门内容
+                if (isWindows) {
+                    const rand = Math.random();
+                    if (rand < 0.33) {
+                        useScreenshot = true;
+                        console.log('主动搭话模式：双开模式(Windows)，使用截图搭话');
+                    } else if (rand < 0.66) {
+                        useWindowTitle = true;
+                        console.log('主动搭话模式：双开模式(Windows)，使用窗口标题搭话');
+                    } else {
+                        console.log('主动搭话模式：双开模式(Windows)，使用热门内容');
+                    }
+                } else {
+                    useScreenshot = Math.random() < 0.5;
+                    console.log(`主动搭话模式：双开模式，使用${useScreenshot ? '截图搭话' : '热门内容'}`);
+                }
             } else if (proactiveVisionEnabled) {
-                // 只开启主动视觉时：100%屏幕截图搭话
+                // 只开启主动视觉时：
+                // Windows和非Windows都是100%截图
                 useScreenshot = true;
                 console.log('主动搭话模式：仅视觉模式，使用截图搭话');
+            } else if (proactiveChatEnabled && isWindows) {
+                // 只开启主动搭话时(Windows)：50%窗口标题, 50%热门内容
+                if (Math.random() < 0.5) {
+                    useWindowTitle = true;
+                    console.log('主动搭话模式：仅搭话模式(Windows)，使用窗口标题搭话');
+                } else {
+                    console.log('主动搭话模式：仅搭话模式(Windows)，使用热门内容');
+                }
             } else if (proactiveChatEnabled) {
-                // 只开启主动搭话时：100%热门内容
+                // 只开启主动搭话时(非Windows)：100%热门内容
                 useScreenshot = false;
+                useWindowTitle = false;
                 console.log('主动搭话模式：仅搭话模式，使用热门内容');
             } else {
                 // 两个都关闭，不执行搭话
@@ -4793,9 +4824,15 @@ function init_app() {
                 const screenshotDataUrl = await captureProactiveChatScreenshot();
 
                 if (!screenshotDataUrl) {
-                    console.log('主动搭话截图失败，退回使用热门内容搭话');
-                    // 截图失败时，如果主动搭话功能开启，则退回使用热门内容
-                    if (proactiveChatEnabled) {
+                    console.log('主动搭话截图失败，退回使用其他方式');
+                    // 截图失败时的回退策略
+                    if (isWindows && proactiveChatEnabled) {
+                        // Windows下回退到窗口标题
+                        useScreenshot = false;
+                        useWindowTitle = true;
+                        console.log('已切换到窗口标题搭话模式');
+                    } else if (proactiveChatEnabled) {
+                        // 非Windows或不支持窗口标题时回退到热门内容
                         useScreenshot = false;
                         console.log('已切换到热门内容搭话模式');
                     } else {
@@ -4805,6 +4842,43 @@ function init_app() {
                     }
                 } else {
                     requestBody.screenshot_data = screenshotDataUrl;
+                }
+            }
+
+            if (useWindowTitle && !useScreenshot) {
+                // 使用窗口标题搭话（Windows only）
+                try {
+                    const titleResponse = await fetch('/api/get_window_title');
+                    const titleResult = await titleResponse.json();
+                    
+                    // await 期间用户可能关闭了功能，避免继续执行
+                    if (!proactiveChatEnabled && !proactiveVisionEnabled) {
+                        console.log('功能已关闭，取消本次搭话');
+                        return;
+                    }
+
+                    if (titleResult.success && titleResult.window_title) {
+                        requestBody.window_title = titleResult.window_title;
+                        console.log('成功获取窗口标题:', titleResult.window_title);
+                    } else {
+                        console.log('获取窗口标题失败，退回使用热门内容');
+                        if (proactiveChatEnabled) {
+                            useWindowTitle = false;
+                            console.log('已切换到热门内容搭话模式');
+                        } else {
+                            console.log('获取窗口标题失败且未开启主动搭话，跳过本次搭话');
+                            return;
+                        }
+                    }
+                } catch (error) {
+                    console.error('获取窗口标题时出错:', error);
+                    if (proactiveChatEnabled) {
+                        useWindowTitle = false;
+                        console.log('已切换到热门内容搭话模式');
+                    } else {
+                        console.log('获取窗口标题失败且未开启主动搭话，跳过本次搭话');
+                        return;
+                    }
                 }
             }
 
@@ -4820,6 +4894,13 @@ function init_app() {
 
             if (result.success) {
                 if (result.action === 'chat') {
+                    // 检测用户是否在20秒内有过输入
+                    const timeSinceLastInput = Date.now() - lastUserInputTime;
+                    if (timeSinceLastInput < 20000) {
+                        console.log(`主动搭话作废：用户在${Math.round(timeSinceLastInput / 1000)}秒前有过输入`);
+                        return;
+                    }
+                    
                     console.log('主动搭话已发送:', result.message);
                     // 后端会直接通过session发送消息和TTS，前端无需处理显示
                 } else if (result.action === 'pass') {
@@ -4844,6 +4925,39 @@ function init_app() {
         if (proactiveChatTimer) {
             clearTimeout(proactiveChatTimer);
             proactiveChatTimer = null;
+        }
+    }
+
+    /**
+     * 安全的Windows系统检测函数
+     * 优先使用 navigator.userAgentData，然后 fallback 到 navigator.userAgent，最后才用已弃用的 navigator.platform
+     * @returns {boolean} 是否为Windows系统
+     */
+    function isWindowsOS() {
+        try {
+            // 优先使用现代 API（如果支持）
+            if (navigator.userAgentData && navigator.userAgentData.platform) {
+                const platform = navigator.userAgentData.platform.toLowerCase();
+                return platform.includes('win');
+            }
+            
+            // Fallback 到 userAgent 字符串检测
+            if (navigator.userAgent) {
+                const ua = navigator.userAgent.toLowerCase();
+                return ua.includes('win');
+            }
+            
+            // 最后的兼容方案：使用已弃用的 platform API
+            if (navigator.platform) {
+                const platform = navigator.platform.toLowerCase();
+                return platform.includes('win');
+            }
+            
+            // 如果所有方法都不可用，默认返回false
+            return false;
+        } catch (error) {
+            console.error('Windows检测失败:', error);
+            return false;
         }
     }
 
