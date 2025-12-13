@@ -442,6 +442,14 @@ class CustomStaticFiles(StaticFiles):
                 logger.info(f"跳过UI图标目录: {file_path}")
                 return False
         
+        # 优先检查：来自用户Live2D或Mods目录的PNG文件
+        # 这些目录下的PNG通常都是模型纹理，应该被压缩
+        user_content_paths = ['user_live2d', 'user_mods']
+        for user_path in user_content_paths:
+            if user_path in file_path_lower:
+                logger.info(f"识别为用户模型纹理（路径匹配）: {file_path}")
+                return True
+        
         # 检查是否为Live2D纹理命名模式
         # Live2D纹理通常命名为texture_00.png, texture_01.png, texture_02.png等
         live2d_patterns = [
