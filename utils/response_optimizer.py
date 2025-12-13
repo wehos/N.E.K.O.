@@ -211,26 +211,54 @@ def optimize_response(text: str,
         deduped.append(key)
 
     # 3) 合并并按照 max_words 限制（统一使用字符计数）
+    start, end = enclosure
+    
+    # 计算有效的最大长度，预留包裹符空间
     if max_words and int(max_words) > 0:
+        maxw = int(max_words)
+        # 预留包裹符长度
+        enclosure_len = len(start) + len(end)
+        effective_maxw = maxw - enclosure_len
+        if effective_maxw <= 0:
+            # 如果包裹符本身已经超过限制，返回空字符串
+            return ''
+    else:
+        maxw = None
+        effective_maxw = None
+
+    if maxw and effective_maxw > 0:
         out_parts = []
         total = 0
-        maxw = int(max_words)
+        # 提前计算分隔符
+        separator = _get_separator(''.join(deduped) if deduped else text)
+        sep_len = len(separator)
+        
         for s in deduped:
             s_len = len(s)
-            if total + s_len <= maxw:
+            # 计算包含分隔符的总长度
+            separator_cost = sep_len if out_parts else 0
+            if total + separator_cost + s_len <= effective_maxw:
                 out_parts.append(s)
-                total += s_len
+                total += separator_cost + s_len
             else:
-                remain = maxw - total
+                remain = effective_maxw - total
                 if remain > 0:
-                    truncated = s[:remain].rstrip()
-                    if not truncated.endswith('…'):
-                        truncated = truncated + '…'
-                    out_parts.append(truncated)
+                    # 截断时也要考虑分隔符
+                    separator_cost = sep_len if out_parts else 0
+                    if separator_cost > 0 and remain > separator_cost:
+                        # 如果还有空间放分隔符和部分内容
+                        truncated = s[:remain - separator_cost].rstrip()
+                        if not truncated.endswith('…'):
+                            truncated = truncated + '…'
+                        out_parts.append(truncated)
+                    elif remain > 0:
+                        # 只能放部分内容，没有空间放分隔符
+                        truncated = s[:remain].rstrip()
+                        if not truncated.endswith('…'):
+                            truncated = truncated + '…'
+                        out_parts.append(truncated)
                 break
         
-        # 智能连接：检测文本是否包含拉丁字母或空格，决定连接方式
-        separator = _get_separator(''.join(out_parts) if out_parts else text)
         final = separator.join(out_parts).strip()
     else:
         # 智能连接：检测文本是否包含拉丁字母或空格，决定连接方式
@@ -242,9 +270,12 @@ def optimize_response(text: str,
     final = final.strip()
 
     # 5) 应用 enclosure
-    start, end = enclosure
-    # 如果已经被同样的 enclosure 包住则直接返回
-    if final.startswith(start) and final.endswith(end):
+    # 如果内容为空，返回空字符串而不是包裹符
+    if not final:
+        return ''
+    
+    # 只有当包裹符的start和end都非空时才检查是否已被包裹
+    if start and end and final.startswith(start) and final.endswith(end):
         return final
 
     return f"{start}{final}{end}"
