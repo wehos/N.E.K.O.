@@ -14,33 +14,50 @@ Live2DManager.prototype.setupDragAndDrop = function(model) {
 
     // 智能事件传播管理 - 在拖动过程中临时禁用按钮事件拦截
     const enableButtonEventPropagation = () => {
+        const elementsToDisable = new Set();
+        
+        // 收集所有按钮元素
         const buttons = document.querySelectorAll('.live2d-floating-btn, [id^="live2d-btn-"]');
         buttons.forEach(btn => {
-            btn.style.pointerEvents = 'none';
+            if (btn) {
+                elementsToDisable.add(btn);
+                // 保存当前的pointerEvents值
+                const currentValue = btn.style.pointerEvents || '';
+                btn.setAttribute('data-prev-pointer-events', currentValue);
+                btn.style.pointerEvents = 'none';
+            }
         });
         
-        const buttonWrappers = document.querySelectorAll('[id^="live2d-btn-"]').parentElement || 
-                              document.querySelectorAll('.live2d-floating-btn').parentElement;
-        if (buttonWrappers.length > 0) {
-            buttonWrappers.forEach(wrapper => {
-                wrapper.style.pointerEvents = 'none';
-            });
-        }
+        // 收集所有按钮包装器元素
+        buttons.forEach(btn => {
+            if (btn && btn.parentElement) {
+                elementsToDisable.add(btn.parentElement);
+            }
+        });
+        
+        // 处理包装器元素
+        elementsToDisable.forEach(element => {
+            if (element && !element.hasAttribute('data-prev-pointer-events')) {
+                const currentValue = element.style.pointerEvents || '';
+                element.setAttribute('data-prev-pointer-events', currentValue);
+                element.style.pointerEvents = 'none';
+            }
+        });
     };
 
     const disableButtonEventPropagation = () => {
-        const buttons = document.querySelectorAll('.live2d-floating-btn, [id^="live2d-btn-"]');
-        buttons.forEach(btn => {
-            btn.style.pointerEvents = 'auto';
+        const elementsToRestore = document.querySelectorAll('[data-prev-pointer-events]');
+        elementsToRestore.forEach(element => {
+            if (element) {
+                const prevValue = element.getAttribute('data-prev-pointer-events');
+                if (prevValue === '') {
+                    element.style.pointerEvents = '';
+                } else {
+                    element.style.pointerEvents = prevValue;
+                }
+                element.removeAttribute('data-prev-pointer-events');
+            }
         });
-        
-        const buttonWrappers = document.querySelectorAll('[id^="live2d-btn-"]').parentElement || 
-                              document.querySelectorAll('.live2d-floating-btn').parentElement;
-        if (buttonWrappers.length > 0) {
-            buttonWrappers.forEach(wrapper => {
-                wrapper.style.pointerEvents = 'auto';
-            });
-        }
     };
 
     model.on('pointerdown', (event) => {
