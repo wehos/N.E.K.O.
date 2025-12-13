@@ -12,6 +12,7 @@ dependencies = [
   "fastapi~=0.115.9",
   "websockets~=15.0.1",
   "soxr~=0.5.0",
+  "soundfile",
   "numpy~=1.26.4",
   "pyaudio~=0.2.14",
   "websocket-client~=1.8.0",

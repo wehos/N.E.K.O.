@@ -15,6 +15,7 @@ from multiprocessing import Queue as MPQueue, Process
 import threading
 import io
 import wave
+import soundfile as sf
 import aiohttp
 from functools import partial
 logger = logging.getLogger(__name__)
@@ -665,19 +666,31 @@ def cosyvoice_vc_tts_worker(request_queue, response_queue, audio_api_key, voice_
     class Callback(ResultCallback):
         def __init__(self, response_queue):
             self.response_queue = response_queue
-            self.cache = np.zeros(0).astype(np.float32)
+            self.ogg_buffer = bytearray()
+            self.decoded_samples = 0  # 已输出的采样数
             
         def on_open(self): 
             pass
             
         def on_complete(self): 
-            if len(self.cache) > 0:
-                data = (soxr.resample(self.cache, 24000, 48000, quality='HQ') * 32768.).clip(-32768, 32767).astype(np.int16).tobytes()
-                self.response_queue.put(data)
-                self.cache = np.zeros(0).astype(np.float32)
+            # 解码剩余数据
+            if len(self.ogg_buffer) > 0:
+                try:
+                    audio, sr = sf.read(io.BytesIO(self.ogg_buffer), dtype='float32')
+                    if len(audio) > self.decoded_samples:
+                        new_audio = audio[self.decoded_samples:]
+                        audio_int16 = (new_audio * 32768.0).clip(-32768, 32767).astype(np.int16)
+                        self.response_queue.put(audio_int16.tobytes())
+                except Exception as e:
+                    logger.error(f"on_complete 解码出错: {e}")
+                finally:
+                    self.ogg_buffer = bytearray()
+                    self.decoded_samples = 0
                 
         def on_error(self, message: str): 
             print(f"TTS Error: {message}")
+            self.ogg_buffer = bytearray()
+            self.decoded_samples = 0
             
         def on_close(self): 
             pass
@@ -686,13 +699,19 @@ def cosyvoice_vc_tts_worker(request_queue, response_queue, audio_api_key, voice_
             pass
             
         def on_data(self, data: bytes) -> None:
-            audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            self.cache = np.concatenate([self.cache, audio])
-            if len(self.cache) >= 8000:
-                data = self.cache[:8000]
-                data = (soxr.resample(data, 24000, 48000, quality='HQ') * 32768.).clip(-32768, 32767).astype(np.int16).tobytes()
-                self.response_queue.put(data)
-                self.cache = self.cache[8000:]
+            # 累积 OGG 数据
+            self.ogg_buffer.extend(data)
+            try:
+                # 尝试解码当前累积的所有数据
+                audio, sr = sf.read(io.BytesIO(self.ogg_buffer), dtype='float32')
+                # 只输出新解码的部分
+                if len(audio) > self.decoded_samples:
+                    new_audio = audio[self.decoded_samples:]
+                    audio_int16 = (new_audio * 32768.0).clip(-32768, 32767).astype(np.int16)
+                    self.response_queue.put(audio_int16.tobytes())
+                    self.decoded_samples = len(audio)
+            except Exception as e:
+                print("TTS Error: ", e)
             
     callback = Callback(response_queue)
     current_speech_id = None
@@ -727,7 +746,7 @@ def cosyvoice_vc_tts_worker(request_queue, response_queue, audio_api_key, voice_
                     model="cosyvoice-v3-plus",
                     voice=voice_id,
                     speech_rate=1.1,
-                    format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                    format=AudioFormat.OGG_OPUS_48KHZ_MONO_64KBPS,
                     callback=callback,
                 )
             except Exception as e:
