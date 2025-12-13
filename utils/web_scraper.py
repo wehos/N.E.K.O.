@@ -7,7 +7,7 @@ import httpx
 import random
 import re
 import platform
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 import logging
 from urllib.parse import quote
 
@@ -284,12 +284,17 @@ def format_trending_content(trending_content: Dict[str, Any]) -> str:
     return "\n".join(output_lines)
 
 
-def get_active_window_title() -> Optional[str]:
+def get_active_window_title(include_raw: bool = False) -> Optional[Union[str, Dict[str, str]]]:
     """
     获取当前活跃窗口的标题（仅支持Windows）
     
+    Args:
+        include_raw: 是否返回原始标题。默认False，仅返回截断后的安全标题。
+                     设为True时返回包含sanitized和raw的字典。
+    
     Returns:
-        窗口标题字符串，如果获取失败则返回None
+        默认情况：截断后的安全标题字符串（前30字符），失败返回None
+        include_raw=True时：{'sanitized': '截断标题', 'raw': '完整标题'}，失败返回None
     """
     if platform.system() != 'Windows':
         logger.warning("获取活跃窗口标题仅支持Windows系统")
@@ -304,11 +309,18 @@ def get_active_window_title() -> Optional[str]:
     try:
         active_window = gw.getActiveWindow()
         if active_window:
-            title = active_window.title
+            raw_title = active_window.title
             # 截断标题以避免记录敏感信息
-            sanitized_title = title[:30] + '...' if len(title) > 30 else title
+            sanitized_title = raw_title[:30] + '...' if len(raw_title) > 30 else raw_title
             logger.info(f"获取到活跃窗口标题: {sanitized_title}")
-            return title
+            
+            if include_raw:
+                return {
+                    'sanitized': sanitized_title,
+                    'raw': raw_title
+                }
+            else:
+                return sanitized_title
         else:
             logger.warning("没有找到活跃窗口")
             return None
@@ -601,29 +613,32 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
     
     Returns:
         包含窗口标题和搜索结果的字典
+        注意：返回的window_title_sanitized是截断版本，window_title_raw仅用于内部搜索
     """
     try:
-        # 获取活跃窗口标题
-        window_title = get_active_window_title()
+        # 获取活跃窗口标题（同时获取原始和截断版本）
+        title_result = get_active_window_title(include_raw=True)
         
-        if not window_title:
+        if not title_result:
             return {
                 'success': False,
                 'error': '无法获取当前活跃窗口标题'
             }
         
-        # 清理窗口标题以获取搜索关键词
-        search_query = clean_window_title(window_title)
+        sanitized_title = title_result['sanitized']
+        raw_title = title_result['raw']
+        
+        # 清理窗口标题以获取搜索关键词（使用原始标题以获得更好的搜索结果）
+        search_query = clean_window_title(raw_title)
         
         if not search_query or len(search_query) < 2:
             return {
                 'success': False,
                 'error': '窗口标题无法提取有效的搜索关键词',
-                'window_title': window_title
+                'window_title': sanitized_title  # 返回截断版本
             }
         
-        # 截断窗口标题以避免记录敏感信息
-        sanitized_title = window_title[:30] + '...' if len(window_title) > 30 else window_title
+        # 日志中使用截断版本
         logger.info(f"从窗口标题「{sanitized_title}」提取搜索关键词: {search_query}")
         
         # 进行百度搜索
@@ -631,7 +646,7 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
         
         return {
             'success': search_result.get('success', False),
-            'window_title': window_title,
+            'window_title': sanitized_title,  # 默认返回截断版本
             'search_query': search_query,
             'search_results': search_result.get('results', []),
             'error': search_result.get('error') if not search_result.get('success') else None
@@ -659,13 +674,12 @@ def format_window_context_content(content: Dict[str, Any]) -> str:
         return f"获取窗口上下文失败: {content.get('error', '未知错误')}"
     
     output_lines = []
+    # window_title 现在是截断后的安全版本（来自fetch_window_context_content），不会泄露敏感信息
     window_title = content.get('window_title', '')
     search_query = content.get('search_query', '')
     results = content.get('search_results', [])
     
-    # 为避免泄露可能的敏感信息，仅显示脱敏后的窗口标题（最多30字符）
-    sanitized_title = window_title[:30] + '...' if len(window_title) > 30 else window_title
-    output_lines.append(f"【当前活跃窗口】{sanitized_title}")
+    output_lines.append(f"【当前活跃窗口】{window_title}")
     output_lines.append(f"【搜索关键词】{search_query}")
     output_lines.append("")
     output_lines.append("【相关信息】")
