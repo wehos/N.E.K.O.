@@ -466,6 +466,21 @@
             margin-top: 15px;
         }
 
+        .action-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .action-group .control-input {
+            flex: 1;
+        }
+
+        .action-group .btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
         /* 响应式调整 */
         @media (max-width: 768px) {
             .button-group {
@@ -1608,37 +1623,12 @@
                                 <button class="btn btn-primary" onclick="scanLocalItems()" style="min-width: 160px;">
                                     <span data-i18n="steam.scanLocalItems">扫描本地物品</span>
                                 </button>
-                                <button class="btn btn-primary" onclick="toggleSettingsPanel()"
+                                <button class="btn btn-secondary" onclick="uploadModelToLive2d()"
                                     style="min-width: 180px;">
-                                    <span id="settings-toggle-icon">⚙️</span> <span
-                                        data-i18n="steam.configurePath">配置路径</span>
+                                    <span>📁</span> <span data-i18n="steam.importModel">导入模型</span>
                                 </button>
-                            </div>
-                        </div>
-
-                        <!-- 路径配置区域 - 可折叠 -->
-                        <div class="settings-container">
-
-                            <div id="settings-panel" class="config-section" style="display: none;">
-                                <h3 data-i18n="steam.localModPathConfig">本地mod路径配置</h3>
-
-                                <div class="control-group">
-                                    <div class="control-label" data-i18n="steam.localModFolder">本地mod文件夹路径</div>
-                                    <input type="text" id="default-workshop-folder" class="control-input"
-                                        data-i18n-placeholder="steam.localModFolder" placeholder="本地mod文件夹路径">
-                                    <div class="help-text" data-i18n="steam.defaultPathHint">未指定扫描路径时将使用此默认路径</div>
-                                    <div class="help-text success" data-i18n="steam.defaultPathExample">提示：默认路径通常在
-                                        我的文档/N.E.K.O/live2d</div>
-                                </div>
-
-
-
-                                <div class="button-group" style="gap: 10px;">
-                                    <button class="btn btn-secondary" onclick="loadDefaultConfig()"
-                                        data-i18n="steam.loadConfig">加载当前配置</button>
-                                    <button class="btn btn-success" onclick="saveDefaultConfig()"
-                                        data-i18n="steam.saveConfig">保存配置</button>
-                                </div>
+                                <!-- 隐藏的文件夹选择输入 -->
+                                <input type="file" id="model-folder-upload" webkitdirectory style="display:none">
                             </div>
                         </div>
 
@@ -1683,8 +1673,14 @@
 
                     <div class="control-group">
                         <div class="control-label" data-i18n="steam.previewImagePath">预览图片路径 *</div>
-                        <input type="text" id="preview-image" class="control-input" placeholder="从本地物品中获取的预览图片路径"
-                            readonly data-i18n-placeholder="steam.previewImagePlaceholder">
+                        <div class="action-group">
+                            <input type="text" id="preview-image" class="control-input" placeholder="从本地物品中获取的预览图片路径"
+                                readonly data-i18n-placeholder="steam.previewImagePlaceholder">
+                            <button class="btn btn-secondary" onclick="selectPreviewImage()"
+                                data-i18n="steam.selectImage">选择图片</button>
+                        </div>
+                        <!-- 隐藏的图片文件选择输入 -->
+                        <input type="file" id="preview-image-upload" accept=".jpg,.jpeg,.png" style="display:none">
                         <div class="control-hint" style="color: red; font-size: 14px;"
                             data-i18n="steam.previewImageSizeHint">提示：预览图片大小需要小于1MB</div>
                     </div>
@@ -1752,6 +1748,93 @@
                 }
             }
         }
+
+        // 导入模型到 live2d 文件夹（与 Live2D Manager 相同）
+        function uploadModelToLive2d() {
+            document.getElementById('model-folder-upload').click();
+        }
+
+        // 模型文件夹选择后的处理
+        document.getElementById('model-folder-upload')?.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+
+            showMessage(window.t ? window.t('steam.modelImporting') : '正在导入模型...', 'info');
+
+            try {
+                const formData = new FormData();
+                for (const file of files) {
+                    formData.append('files', file, file.webkitRelativePath || file.name);
+                }
+
+                const response = await fetch('/api/live2d/upload_model', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage(window.t ? window.t('steam.modelImportSuccess') : `模型导入成功: ${result.message}`, 'success');
+                    // 刷新本地物品列表
+                    setTimeout(() => {
+                        scanLocalItems();
+                    }, 1000);
+                } else {
+                    showMessage(window.t ? window.t('steam.modelImportFailed', { error: result.error }) : `导入失败: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('导入模型失败:', error);
+                showMessage(window.t ? window.t('steam.modelImportError', { error: error.message }) : `导入错误: ${error.message}`, 'error');
+            } finally {
+                // 重置file input以允许重新选择同一个文件夹
+                e.target.value = '';
+            }
+        });
+
+        // 选择预览图片
+        function selectPreviewImage() {
+            document.getElementById('preview-image-upload').click();
+        }
+
+        // 预览图片选择后上传到临时位置
+        document.getElementById('preview-image-upload')?.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // 检查文件大小（小于1MB）
+            if (file.size > 1024 * 1024) {
+                showMessage(window.t ? window.t('steam.previewImageTooLarge') : '预览图片大小必须小于1MB', 'error');
+                return;
+            }
+
+            showMessage(window.t ? window.t('steam.uploadingPreviewImage') : '正在上传预览图片...', 'info');
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch('/api/steam/upload-preview-image', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('preview-image').value = result.path;
+                    showMessage(window.t ? window.t('steam.previewImageUploaded') : '预览图片已选择', 'success');
+                } else {
+                    showMessage(window.t ? window.t('steam.previewImageUploadFailed', { error: result.error }) : `上传失败: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('上传预览图片失败:', error);
+                showMessage(window.t ? window.t('steam.previewImageUploadError', { error: error.message }) : `上传错误: ${error.message}`, 'error');
+            } finally {
+                // 重置file input
+                e.target.value = '';
+            }
+        });
 
         // 本地物品区域切换功能
         function toggleLocalItemsSection() {
@@ -1858,32 +1941,68 @@
 
         // 提示：由于浏览器安全限制，浏览按钮仅提供路径输入提示
 
-        // 加载默认配置
+        // 选择文件夹并填充到指定输入框
+        async function selectFolderForInput(inputId) {
+            try {
+                // 检查浏览器是否支持 File System Access API
+                if (!('showDirectoryPicker' in window)) {
+                    showMessage(window.t ? window.t('steam.folderPickerNotSupported') : '当前浏览器不支持目录选择，请手动输入路径', 'warning');
+                    // 移除 readonly 属性让用户可以手动输入
+                    document.getElementById(inputId).removeAttribute('readonly');
+                    return;
+                }
+
+                const dirHandle = await window.showDirectoryPicker({
+                    mode: 'read'
+                });
+
+                // 获取选中目录的路径（通过目录名称）
+                // 注意：File System Access API 不直接提供完整路径，只提供目录名称
+                // 我们需要通知用户已选择的目录名
+                const folderName = dirHandle.name;
+
+                // 由于浏览器安全限制，无法获取完整路径
+                // 提示用户输入完整路径
+                showMessage(window.t ? window.t('steam.folderSelectedPartial', { name: folderName }) :
+                    `已选择目录: "${folderName}"。由于浏览器安全限制，请手动输入完整路径`, 'warning');
+
+                // 移除 readonly 让用户可以输入完整路径
+                document.getElementById(inputId).removeAttribute('readonly');
+                document.getElementById(inputId).focus();
+
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    // 用户取消了选择
+                    showMessage(window.t ? window.t('steam.folderSelectionCancelled') : '已取消目录选择', 'info');
+                } else {
+                    console.error('选择目录失败:', error);
+                    showMessage(window.t ? window.t('steam.folderSelectionError') : '选择目录失败', 'error');
+                }
+            }
+        }
+
+        // 加载默认配置 - 优先使用 live2d_dir 作为默认值
         function loadDefaultConfig() {
             showMessage(window.t ? window.t('steam.loadingConfig') : '正在加载配置...', 'info');
 
-            fetch('/api/steam/workshop/config', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.success) {
-                        // 填充表单
-                        const defaultFolder = data.config.user_mod_folder || data.config.default_workshop_folder || '';
+            // 先获取系统 live2d_dir 作为默认值
+            Promise.all([
+                fetch('/api/steam/workshop/config').then(r => r.json()),
+                fetch('/api/config/info').then(r => r.json()).catch(() => ({ live2d_dir: '' }))
+            ])
+                .then(([workshopData, configInfo]) => {
+                    if (workshopData.success) {
+                        // 优先使用用户配置的路径，否则使用 live2d_dir
+                        const live2dDir = configInfo.live2d_dir || '';
+                        const defaultFolder = workshopData.config.user_mod_folder ||
+                            workshopData.config.default_workshop_folder ||
+                            live2dDir;
 
                         document.getElementById('default-workshop-folder').value = defaultFolder;
 
                         showMessage(window.t ? window.t('steam.configLoadSuccess') : '配置加载成功', 'success');
                     } else {
-                        showMessage(window.t ? window.t('steam.configLoadFailed', { error: data.error || (window.t ? window.t('common.unknownError') : '未知错误') }) : `配置加载失败: ${data.error || '未知错误'}`, 'error');
+                        showMessage(window.t ? window.t('steam.configLoadFailed', { error: workshopData.error || (window.t ? window.t('common.unknownError') : '未知错误') }) : `配置加载失败: ${workshopData.error || '未知错误'}`, 'error');
                     }
                 })
                 .catch(error => {
@@ -2158,9 +2277,10 @@
             const itemsList = document.getElementById('local-items-list');
 
             if (localItems.length === 0) {
+                const emptyMessage = window.t ? window.t('steam.no_local_items') : '在指定文件夹中未找到任何创意工坊物品';
                 itemsList.innerHTML = `
                     <div class="empty-state">
-                        <p data-i18n="steam.no_local_items">在指定文件夹中未找到任何创意工坊物品</p>
+                        <p>${emptyMessage}</p>
                     </div>
                 `;
                 return;
@@ -2600,7 +2720,7 @@
             const loadingCount = { value: 0 };
 
             return {
-                show: function (message = '加载中...') {
+                show: function (message = window.t ? window.t('common.loading') : '加载中...') {
                     loadingCount.value++;
                     if (loadingCount.value === 1) {
                         const loadingOverlay = document.createElement('div');
@@ -3493,8 +3613,8 @@
             }
         }
 
-        // 初始化页面
-        window.onload = function () {
+        // 初始化页面 - 需要等待 i18n 加载完成
+        function initPage() {
             // 初始化时添加一些示例标签
             addTag(window.t ? window.t('steam.defaultTagMod') : 'Mod');
             addTag(window.t ? window.t('steam.defaultTagCharacter') : 'Character');
@@ -3515,6 +3635,37 @@
 
             // 页面加载时自动扫描本地物品
             scanLocalItems();
+        }
+
+        // 检查 i18n 是否已初始化，如果没有则等待
+        function waitForI18nAndInit() {
+            let initialized = false;
+
+            function doInit() {
+                if (initialized) return;
+                initialized = true;
+                initPage();
+            }
+
+            // 如果 window.t 已经存在且 i18n 已初始化，直接执行
+            if (typeof window.t === 'function' && window.i18n && window.i18n.isInitialized) {
+                doInit();
+            } else {
+                // 监听 localechange 事件（i18n 初始化完成后触发）
+                window.addEventListener('localechange', doInit, { once: true });
+
+                // 安全网：5秒后强制初始化（即使 i18n 未完成）
+                setTimeout(() => {
+                    if (!initialized && typeof window.t !== 'function') {
+                        console.warn('[Workshop] i18n 未就绪，使用默认文本初始化');
+                    }
+                    doInit();
+                }, 5000);
+            }
+        }
+
+        window.onload = function () {
+            waitForI18nAndInit();
         };
     </script>
 </body>

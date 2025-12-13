@@ -744,6 +744,46 @@ async def get_api_providers_config():
         }
 
 
+@app.get("/api/config/info")
+async def get_config_info():
+    """获取配置目录信息（供前端使用）"""
+    try:
+        return _config_manager.get_config_info()
+    except Exception as e:
+        logger.error(f"获取配置目录信息失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "live2d_dir": ""
+        }
+
+@app.post("/api/steam/upload-preview-image")
+async def upload_preview_image(file: UploadFile = File(...)):
+    """上传预览图片到临时位置"""
+    try:
+        # 验证文件类型
+        if not file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            return JSONResponse(status_code=400, content={"success": False, "error": "只支持 JPG 和 PNG 格式"})
+        
+        # 验证文件大小（小于1MB）
+        content = await file.read()
+        if len(content) > 1024 * 1024:
+            return {"success": False, "error": "文件大小必须小于1MB"}
+        
+        # 保存到临时目录
+        temp_dir = _config_manager.app_docs_dir / "temp"
+        temp_dir.mkdir(exist_ok=True)
+        temp_path = temp_dir / file.filename
+        
+        with open(temp_path, 'wb') as f:
+            f.write(content)
+        
+        logger.info(f"预览图片已上传到: {temp_path}")
+        return {"success": True, "path": str(temp_path)}
+    except Exception as e:
+        logger.error(f"上传预览图片失败: {e}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/config/core_api")
 async def update_core_config(request: Request):
     """更新核心配置（API Key）"""
@@ -3587,64 +3627,28 @@ async def scan_local_workshop_items(request: Request):
     try:
         logger.info('接收到扫描本地创意工坊物品的API请求')
         
-        # 确保配置已加载
-        from utils.workshop_utils import load_workshop_config
-        workshop_config_data = load_workshop_config()
-        logger.info(f'创意工坊配置已加载: {workshop_config_data}')
+        # 始终使用 live2d_dir 作为扫描目录（忽略workshop配置）
+        live2d_folder = str(_config_manager.live2d_dir)
+        logger.info(f'使用 live2d 目录进行扫描: {live2d_folder}')
         
-        data = await request.json()
-        logger.info(f'请求数据: {data}')
-        folder_path = data.get('folder_path')
+        # 确保目录存在
+        if not os.path.exists(live2d_folder):
+            os.makedirs(live2d_folder, exist_ok=True)
+            logger.info(f'创建 live2d 目录: {live2d_folder}')
         
-        # 安全检查：始终使用get_workshop_path()作为基础目录
-        base_workshop_folder = os.path.abspath(os.path.normpath(get_workshop_path()))
-        
-        # 如果没有提供路径，使用默认路径
-        default_path_used = False
-        if not folder_path:
-            # 优先使用get_workshop_path()函数获取路径
-            folder_path = base_workshop_folder
-            default_path_used = True
-            logger.info(f'未提供文件夹路径，使用默认路径: {folder_path}')
-            # 确保默认文件夹存在
-            ensure_workshop_folder_exists(folder_path)
-        else:
-            # 用户提供了路径，标准化处理
-            folder_path = os.path.normpath(folder_path)
-            
-            # 如果是相对路径，基于默认路径解析
-            if not os.path.isabs(folder_path):
-                folder_path = os.path.normpath(folder_path)
-            
-            logger.info(f'用户指定路径: {folder_path}')
-        
-        logger.info(f'最终使用的文件夹路径: {folder_path}, 默认路径使用状态: {default_path_used}')
-        
-        if not os.path.exists(folder_path):
-            logger.warning(f'文件夹不存在: {folder_path}')
-            return JSONResponse(content={"success": False, "error": f"指定的文件夹不存在: {folder_path}", "default_path_used": default_path_used}, status_code=404)
-        
-        if not os.path.isdir(folder_path):
-            logger.warning(f'指定的路径不是文件夹: {folder_path}')
-            return JSONResponse(content={"success": False, "error": f"指定的路径不是文件夹: {folder_path}", "default_path_used": default_path_used}, status_code=400)
+        if not os.path.isdir(live2d_folder):
+            logger.warning(f'指定的路径不是文件夹: {live2d_folder}')
+            return JSONResponse(content={"success": False, "error": f"指定的路径不是文件夹: {live2d_folder}"}, status_code=400)
         
         # 扫描本地创意工坊物品
         local_items = []
         published_items = []
         item_id = 1
         
-        # 获取Steam下载的workshop路径，这个路径需要被排除
-        steam_workshop_path = get_workshop_path()
-        
         # 遍历文件夹，扫描所有子文件夹
-        for item_folder in os.listdir(folder_path):
-            item_path = os.path.join(folder_path, item_folder)
+        for item_folder in os.listdir(live2d_folder):
+            item_path = os.path.join(live2d_folder, item_folder)
             if os.path.isdir(item_path):
-                    
-                # 排除Steam下载的物品目录（WORKSHOP_PATH）
-                if os.path.normpath(item_path) == os.path.normpath(steam_workshop_path):
-                    logger.info(f"跳过Steam下载的workshop目录: {item_path}")
-                    continue
                 stat_info = os.stat(item_path)
                 
                 # 处理预览图路径（如果有）
@@ -3667,8 +3671,7 @@ async def scan_local_workshop_items(request: Request):
             "success": True,
             "local_items": local_items,
             "published_items": published_items,
-            "folder_path": folder_path,  # 返回绝对路径
-            "default_path_used": default_path_used
+            "folder_path": live2d_folder
         })
         
     except Exception as e:
@@ -3736,65 +3739,7 @@ async def proxy_image(image_path: str):
         
         # 检查是否是远程URL，如果是则直接返回错误（目前只支持本地文件）
         if decoded_path.startswith(('http://', 'https://')):
-            return JSONResponse(content={"success": False, "error": "暂不支持远程图片URL"}, status_code=400)
-        
-        # 获取基础目录和允许访问的目录列表
-        base_dir = _get_app_root()
-        allowed_dirs = [
-            os.path.realpath(os.path.join(base_dir, 'static')),
-            os.path.realpath(os.path.join(base_dir, 'assets'))
-        ]
-        
-        
-        # 添加get_workshop_path()返回的路径作为允许目录，支持相对路径解析
-        try:
-            workshop_base_dir = os.path.abspath(os.path.normpath(get_workshop_path()))
-            if os.path.exists(workshop_base_dir):
-                real_workshop_dir = os.path.realpath(workshop_base_dir)
-                if real_workshop_dir not in allowed_dirs:
-                    allowed_dirs.append(real_workshop_dir)
-                    logger.info(f"添加允许的默认创意工坊目录: {real_workshop_dir}")
-        except Exception as e:
-            logger.warning(f"无法添加默认创意工坊目录: {str(e)}")
-        
-        # 动态添加路径到允许列表：如果请求的路径包含创意工坊相关标识，则允许访问
-        try:
-            # 检查解码后的路径是否包含创意工坊相关路径标识
-            if ('steamapps\\workshop' in decoded_path.lower() or 
-                'steamapps/workshop' in decoded_path.lower()):
-                
-                # 获取创意工坊父目录
-                workshop_related_dir = None
-                
-                # 方法1：如果路径存在，获取文件所在目录或直接使用目录路径
-                if os.path.exists(decoded_path):
-                    if os.path.isfile(decoded_path):
-                        workshop_related_dir = os.path.dirname(decoded_path)
-                    else:
-                        workshop_related_dir = decoded_path
-                else:
-                    # 方法2：尝试从路径中提取创意工坊相关部分
-                    import re
-                    match = re.search(r'(.*?steamapps[/\\]workshop)', decoded_path, re.IGNORECASE)
-                    if match:
-                        workshop_related_dir = match.group(1)
-                
-                # 方法3：如果是Steam创意工坊内容路径，获取content目录
-                if not workshop_related_dir:
-                    content_match = re.search(r'(.*?steamapps[/\\]workshop[/\\]content)', decoded_path, re.IGNORECASE)
-                    if content_match:
-                        workshop_related_dir = content_match.group(1)
-                
-                # 如果找到了相关目录，添加到允许列表
-                if workshop_related_dir and os.path.exists(workshop_related_dir):
-                    real_workshop_dir = os.path.realpath(workshop_related_dir)
-                    if real_workshop_dir not in allowed_dirs:
-                        allowed_dirs.append(real_workshop_dir)
-                        logger.info(f"动态添加允许的创意工坊相关目录: {real_workshop_dir}")
-        except Exception as e:
-            logger.warning(f"动态添加创意工坊路径失败: {str(e)}")
-        
-        logger.info(f"当前允许的目录列表: {allowed_dirs}")
+            return JSONResponse(content={"success": False, "error": "暂不支持远程图片URL"}, status_code=400)   
 
         # Windows路径处理：确保路径分隔符正确
         if os.name == 'nt':  # Windows系统
@@ -3809,35 +3754,14 @@ async def proxy_image(image_path: str):
         
         # 尝试作为绝对路径
         if os.path.exists(decoded_path) and os.path.isfile(decoded_path):
-            # 规范化路径以防止路径遍历攻击
-            real_path = os.path.realpath(decoded_path)
-            # 检查路径是否在允许的目录内
-            if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-                final_path = real_path
+            final_path = os.path.realpath(decoded_path)
         
         # 尝试备选路径格式
         if final_path is None:
             alt_path = decoded_path.replace('\\', '/')
             if os.path.exists(alt_path) and os.path.isfile(alt_path):
-                real_path = os.path.realpath(alt_path)
-                if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-                    final_path = real_path
-        
-        # 尝试相对路径处理 - 相对于static目录
-        if final_path is None:
-            # 对于以../static开头的相对路径，尝试直接从static目录解析
-            if decoded_path.startswith('..\\static') or decoded_path.startswith('../static'):
-                # 提取static后面的部分
-                relative_part = decoded_path.split('static')[1]
-                if relative_part.startswith(('\\', '/')):
-                    relative_part = relative_part[1:]
-                # 构建完整路径
-                relative_path = os.path.join(allowed_dirs[0], relative_part)  # static目录
-                if os.path.exists(relative_path) and os.path.isfile(relative_path):
-                    real_path = os.path.realpath(relative_path)
-                    if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-                        final_path = real_path
-        
+                final_path = os.path.realpath(alt_path)
+            
         # 尝试相对于默认创意工坊目录的路径处理
         if final_path is None:
             try:
@@ -3857,7 +3781,6 @@ async def proxy_image(image_path: str):
                         logger.info(f"找到相对于创意工坊目录的图片: {final_path}")
             except Exception as e:
                 logger.warning(f"处理相对于创意工坊目录的路径失败: {str(e)}")
-        
         
         # 如果仍未找到有效路径，返回错误
         if final_path is None:
@@ -4586,17 +4509,8 @@ async def list_achievements():
 @app.get('/api/file-exists')
 async def check_file_exists(path: str = None):
     try:
-        # file_path 已经通过函数参数获取
-        
         if not path:
             return JSONResponse(content={"exists": False}, status_code=400)
-        
-        # 获取基础目录和允许访问的目录列表
-        base_dir = _get_app_root()
-        allowed_dirs = [
-            os.path.realpath(os.path.join(base_dir, 'static')),
-            os.path.realpath(os.path.join(base_dir, 'assets'))
-        ]
         
         # 解码URL编码的路径
         decoded_path = unquote(path)
@@ -4605,16 +4519,16 @@ async def check_file_exists(path: str = None):
         if os.name == 'nt':
             decoded_path = decoded_path.replace('/', '\\')
         
-        # 规范化路径以防止路径遍历攻击
+        # 安全检查：拒绝包含路径遍历字符的请求
+        if '..' in decoded_path:
+            logger.warning(f"检测到潜在的路径遍历攻击: {decoded_path}")
+            return JSONResponse(content={"exists": False}, status_code=403)
+        
+        # 规范化路径
         real_path = os.path.realpath(decoded_path)
         
-        # 检查路径是否在允许的目录内
-        if any(real_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-            # 检查文件是否存在
-            exists = os.path.exists(real_path) and os.path.isfile(real_path)
-        else:
-            # 不在允许的目录内，返回文件不存在
-            exists = False
+        # 检查文件是否存在
+        exists = os.path.exists(real_path) and os.path.isfile(real_path)
         
         return JSONResponse(content={"exists": exists})
         
@@ -4625,14 +4539,11 @@ async def check_file_exists(path: str = None):
 @app.get('/api/find-first-image')
 async def find_first_image(folder: str = None):
     """
-    查找指定文件夹中的预览图片 - 增强版，添加了严格的安全检查
+    查找指定文件夹中的预览图片
     
     安全注意事项：
-    1. 只允许访问项目内特定的安全目录
-    2. 防止路径遍历攻击
-    3. 限制返回信息，避免泄露文件系统信息
-    4. 记录可疑访问尝试
-    5. 只返回小于 1MB 的图片（Steam创意工坊预览图大小限制）
+    1. 防止路径遍历攻击
+    2. 只返回小于 1MB 的图片（Steam创意工坊预览图大小限制）
     """
     MAX_IMAGE_SIZE = 1 * 1024 * 1024  # 1MB
     
@@ -4642,24 +4553,6 @@ async def find_first_image(folder: str = None):
             logger.warning("收到空的文件夹路径请求")
             return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=400)
         
-        # 安全警告日志记录
-        logger.warning(f"预览图片查找请求: {folder}")
-        
-        # 获取基础目录和允许访问的目录列表
-        base_dir = _get_app_root()
-        allowed_dirs = [
-            os.path.realpath(os.path.join(base_dir, 'static')),
-            os.path.realpath(os.path.join(base_dir, 'assets'))
-        ]
-        
-        # 添加"我的文档/Xiao8"目录到允许列表
-        if os.name == 'nt':  # Windows系统
-            documents_path = os.path.join(os.path.expanduser('~'), 'Documents', 'Xiao8')
-            if os.path.exists(documents_path):
-                real_doc_path = os.path.realpath(documents_path)
-                allowed_dirs.append(real_doc_path)
-                logger.info(f"find-first-image: 添加允许的文档目录: {real_doc_path}")
-        
         # 解码URL编码的路径
         decoded_folder = unquote(folder)
         
@@ -4667,28 +4560,17 @@ async def find_first_image(folder: str = None):
         if os.name == 'nt':
             decoded_folder = decoded_folder.replace('/', '\\')
         
-        # 额外的安全检查：拒绝包含路径遍历字符的请求
+        # 安全检查：拒绝包含路径遍历字符的请求
         if '..' in decoded_folder or '//' in decoded_folder:
             logger.warning(f"检测到潜在的路径遍历攻击: {decoded_folder}")
             return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=403)
         
-        # 规范化路径以防止路径遍历攻击
+        # 规范化路径
         try:
             real_folder = os.path.realpath(decoded_folder)
         except Exception as e:
             logger.error(f"路径规范化失败: {e}")
             return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=400)
-        
-        # 检查路径是否在允许的目录内
-        is_allowed = False
-        for allowed_dir in allowed_dirs:
-            if real_folder.startswith(allowed_dir):
-                is_allowed = True
-                break
-        
-        if not is_allowed:
-            logger.warning(f"访问被拒绝：路径不在允许的目录内 - {real_folder}")
-            return JSONResponse(content={"success": False, "error": "无效的文件夹路径"}, status_code=403)
         
         # 检查文件夹是否存在
         if not os.path.exists(real_folder) or not os.path.isdir(real_folder):
@@ -4713,17 +4595,8 @@ async def find_first_image(folder: str = None):
                         logger.info(f"跳过大于1MB的图片: {image_name} ({file_size / 1024 / 1024:.2f}MB)")
                         continue
                     
-                    # 再次验证图片文件路径是否在允许的目录内
-                    real_image_path = os.path.realpath(image_path)
-                    if any(real_image_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-                        # 只返回相对路径或文件名，不返回完整的文件系统路径，避免信息泄露
-                        # 计算相对于base_dir的相对路径
-                        try:
-                            relative_path = os.path.relpath(real_image_path, base_dir)
-                            return JSONResponse(content={"success": True, "imagePath": relative_path})
-                        except ValueError:
-                            # 如果无法计算相对路径（例如跨驱动器），只返回文件名
-                            return JSONResponse(content={"success": True, "imagePath": image_name})
+                    # 返回图片的绝对路径
+                    return JSONResponse(content={"success": True, "imagePath": image_path})
             except Exception as e:
                 logger.error(f"检查图片文件 {image_name} 失败: {e}")
                 continue
@@ -4732,8 +4605,8 @@ async def find_first_image(folder: str = None):
         
     except Exception as e:
         logger.error(f"查找预览图片文件失败: {e}")
-        # 发生异常时不泄露详细信息
         return JSONResponse(content={"success": False, "error": "服务器内部错误"}, status_code=500)
+
 
 # 辅助函数
 def get_folder_size(folder_path):
