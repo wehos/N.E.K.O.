@@ -297,11 +297,13 @@ class GenerationTruncated(Exception):
     Attributes:
         reason: short string reason code ('hard_limit', 'fence', 'word_limit')
         discard_output: whether caller should discard accumulated output (True for hard limit)
+        partial_content: allowed content before truncation (for fence detection)
     """
-    def __init__(self, reason: str, discard_output: bool = False):
+    def __init__(self, reason: str, discard_output: bool = False, partial_content: str = ""):
         super().__init__(f"Generation truncated: {reason}")
         self.reason = reason
         self.discard_output = discard_output
+        self.partial_content = partial_content
 
 
 def init_stream_state(max_words: int | None = None, hard_char_limit: int = 100, fence_char: str = '|') -> dict:
@@ -343,16 +345,15 @@ def process_stream_chunk(state: dict, chunk: str) -> str:
         # Truncate chunk before fence and raise
         pos = chunk.find(fence)
         allowed = chunk[:pos]
-        # if allowed non-empty, we may return it first; but spec requires instant truncate when '|' detected
-        # We choose to not emit content containing fence; emit allowed prefix (which is before fence) then raise
         if allowed:
             # check hard limit before returning
             if state['chars'] + len(allowed) > hard_limit:
                 raise GenerationTruncated('hard_limit', discard_output=True)
             state['chars'] += len(allowed)
             state['words'] += _count_words_for_state(allowed)
-            # mark terminated
-        raise GenerationTruncated('fence', discard_output=False)
+        # Store allowed content in exception for caller to use
+        exc = GenerationTruncated('fence', discard_output=False, partial_content=allowed)
+        raise exc
 
     # 2) Hard char limit: if adding chunk would exceed, raise and ask to discard output
     if state['chars'] + len(chunk) > hard_limit:

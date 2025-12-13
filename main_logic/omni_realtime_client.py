@@ -590,7 +590,8 @@ class OmniRealtimeClient:
                     # Initialize streaming constraint state for this response
                     try:
                         self._stream_state = init_stream_state(max_words=None, hard_char_limit=100, fence_char='|')
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize stream state: {e}")
                         self._stream_state = None
                 elif event_type == "response.output_item.added":
                     self._current_item_id = event.get("item", {}).get("id")
@@ -642,7 +643,7 @@ class OmniRealtimeClient:
                                             await self.on_response_done()
                                         continue
                                 # Emit allowed delta if any
-                                if allowed and allowed.strip():
+                                if allowed:
                                     await self.on_text_delta(allowed, self._is_first_text_chunk)
                                     self._is_first_text_chunk = False
                                 # If stream_state marks terminated (word limit), finish response
