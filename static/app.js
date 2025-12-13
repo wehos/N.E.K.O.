@@ -1766,6 +1766,10 @@ function init_app() {
             // 使用统一的截图辅助函数进行截取
             const { dataUrl, width, height } = captureCanvasFrame(video);
 
+            // 清理 video 元素释放资源
+            video.srcObject = null;
+            video.remove();
+
             console.log(`截图成功，尺寸: ${width}x${height}`);
 
             // 添加截图到待发送列表（不立即发送）
@@ -4910,6 +4914,9 @@ function init_app() {
                 }
                 const frame = captureCanvasFrame(video, 0.8);
                 dataUrl = frame && frame.dataUrl ? frame.dataUrl : null;
+                // 清理 video 元素释放资源
+                video.srcObject = null;
+                video.remove();
             } else {
                 // 临时调用捕获函数（会弹出授权），函数内部会关闭流
                 dataUrl = await captureProactiveChatScreenshot();
@@ -5000,6 +5007,10 @@ function init_app() {
 
             // 使用统一的截图辅助函数进行截取（使用0.85质量）
             const { dataUrl, width, height } = captureCanvasFrame(video, 0.85);
+
+            // 清理 video 元素释放资源
+            video.srcObject = null;
+            video.remove();
 
             console.log(`主动搭话截图成功，尺寸: ${width}x${height}`);
             return dataUrl;
