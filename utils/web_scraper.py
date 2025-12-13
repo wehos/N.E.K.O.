@@ -663,7 +663,9 @@ def format_window_context_content(content: Dict[str, Any]) -> str:
     search_query = content.get('search_query', '')
     results = content.get('search_results', [])
     
-    output_lines.append(f"【当前活跃窗口】{window_title}")
+    # 为避免泄露可能的敏感信息，仅显示脱敏后的窗口标题（最多30字符）
+    sanitized_title = window_title[:30] + '...' if len(window_title) > 30 else window_title
+    output_lines.append(f"【当前活跃窗口】{sanitized_title}")
     output_lines.append(f"【搜索关键词】{search_query}")
     output_lines.append("")
     output_lines.append("【相关信息】")
